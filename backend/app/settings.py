@@ -30,6 +30,7 @@ class Settings(BaseSettings):
 
     # Dev/testing
     llm_mock: bool = Field(default=False, validation_alias="LLM_MOCK")
+    litellm_debug: bool = Field(default=False, validation_alias="LITELLM_DEBUG")
 
     # Supabase Auth (frontend uses anon key; backend uses it to validate access tokens)
     supabase_url: str | None = Field(default=None, validation_alias="SUPABASE_URL")

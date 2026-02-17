@@ -70,17 +70,50 @@ def execute_via_litellm(
         raise LLMError(f"LLM call failed: {e.__class__.__name__}") from e
 
     latency_ms = int((time.perf_counter() - start) * 1000)
+
+    # LiteLLM returns a dict-like pydantic model (ModelResponse) for many providers.
+    # Normalize to a plain dict so content extraction is consistent.
+    data: Any = resp
+    if not isinstance(data, dict):
+        if hasattr(data, "model_dump"):
+            data = data.model_dump()
+        elif hasattr(data, "dict"):
+            data = data.dict()
+        elif hasattr(data, "to_dict"):
+            data = data.to_dict()
+        else:
+            try:
+                data = dict(data)  # type: ignore[arg-type]
+            except Exception:
+                data = {}
+
     text = ""
-    if isinstance(resp, dict):
+    try:
+        choice0 = (data.get("choices") or [None])[0] or {}
+        msg = choice0.get("message") or {}
+        text = msg.get("content") or ""
+        if not text:
+            # Some providers return `text` directly on choice.
+            text = choice0.get("text") or ""
+    except Exception:
+        text = ""
+
+    if getattr(settings, "litellm_debug", False):
+        print("=" * 80)
+        print("LITELLM DEBUG:")
         try:
-            text = resp["choices"][0]["message"]["content"]
+            print(f"Raw response type: {type(resp)}")
+            print(f"Raw response: {resp}")
         except Exception:
-            text = ""
+            print("Raw response: <unprintable>")
+        print(f"Extracted text: {text!r}")
+        print(f"Returning: {{'response': {text!r}}}")
+        print("=" * 80)
 
     return {
         "trace_id": trace_id,
         "model_used": model_used,
         "latency_ms": latency_ms,
         "response": text,
-        "raw": resp,
+        "raw": data,
     }
