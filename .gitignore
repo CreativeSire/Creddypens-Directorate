@@ -1,0 +1,12 @@
+.env
+backend/.env
+.env.local
+frontend/.env.local
+.venv/
+**/__pycache__/
+*.pyc
+
+# Local run artifacts / logs
+*.out
+*.err
+*.pid
