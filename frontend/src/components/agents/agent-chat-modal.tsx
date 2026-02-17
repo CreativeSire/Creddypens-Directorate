@@ -154,7 +154,7 @@ export function AgentChatModal({ agentCode, orgId, onClose, onAfterMessage }: Ag
   }
 
   return (
-    <div className="fixed inset-0 bg-[#0A0F14]/98 backdrop-blur-sm z-50 flex flex-col">
+    <div className="fixed inset-0 bg-[#0A0F14] backdrop-blur-sm z-50 flex flex-col">
       <div className="h-16 border-b border-[#00F0FF]/30 flex items-center justify-between px-6 bg-[#0D1520]/60">
         <div>
           <div className="flex items-center gap-3">
