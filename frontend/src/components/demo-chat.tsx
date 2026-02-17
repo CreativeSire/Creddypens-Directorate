@@ -12,6 +12,7 @@ export function DemoChat({ agentCode, companyName }: { agentCode: string; compan
   const [meta, setMeta] = useState<{ model_used: string; latency_ms: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const isMock = reply?.startsWith("[MOCK:") ?? false;
 
   async function onSend() {
     setBusy(true);
@@ -55,6 +56,9 @@ export function DemoChat({ agentCode, companyName }: { agentCode: string; compan
       {error ? <div className="text-sm text-red-600">{error}</div> : null}
       {reply ? (
         <div className="rounded-md bg-secondary p-3 text-sm whitespace-pre-wrap space-y-2">
+          {isMock ? (
+            <div className="text-xs text-amber-600 font-semibold">Mock mode enabled (LLM_MOCK=1)</div>
+          ) : null}
           <div>{reply}</div>
           {meta ? (
             <div className="text-xs text-muted-foreground">
@@ -63,7 +67,7 @@ export function DemoChat({ agentCode, companyName }: { agentCode: string; compan
           ) : null}
         </div>
       ) : (
-        <div className="text-xs text-muted-foreground">LLM is mocked (LLM_MOCK=1), so replies echo your prompt.</div>
+        <div className="text-xs text-muted-foreground">Send a message to test the live execution endpoint.</div>
       )}
     </div>
   );

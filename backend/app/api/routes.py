@@ -20,7 +20,7 @@ router = APIRouter()
 
 @router.get("/health")
 async def health() -> dict:
-    return {"ok": True}
+    return {"ok": True, "llm_mock": settings.llm_mock}
 
 
 @router.get("/v1/agents", response_model=list[AgentOut])
