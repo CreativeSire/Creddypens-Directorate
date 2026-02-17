@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 
 import { apiBaseUrl } from "@/lib/env";
@@ -34,8 +34,6 @@ export default function DirectorChat() {
   const [loading, setLoading] = useState(false);
   const [recs, setRecs] = useState<Rec[]>([]);
 
-  const orgId = useMemo(() => getOrgId() || "org_test", []);
-
   async function send() {
     const trimmed = input.trim();
     if (!trimmed) return;
@@ -46,6 +44,7 @@ export default function DirectorChat() {
     setRecs([]);
 
     try {
+      const orgId = getOrgId() || "org_test";
       const res = await fetch(`${apiBaseUrl()}/v1/director/recommend`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

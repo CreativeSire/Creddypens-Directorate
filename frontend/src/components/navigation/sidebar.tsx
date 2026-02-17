@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { BookOpen, GraduationCap, LayoutDashboard, Settings, Users, ChevronDown } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -34,8 +34,7 @@ export default function Sidebar({
 }) {
   const pathname = usePathname();
   const [deptOpen, setDeptOpen] = useState(true);
-
-  const orgName = useMemo(() => getOrgId() || "org_test", []);
+  const [orgName, setOrgName] = useState<string>("—");
 
   useEffect(() => {
     try {
@@ -44,6 +43,10 @@ export default function Sidebar({
     } catch {
       // ignore
     }
+  }, []);
+
+  useEffect(() => {
+    setOrgName(getOrgId() || "—");
   }, []);
 
   function toggleDeptOpen() {

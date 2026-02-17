@@ -12,14 +12,20 @@ function getCompanyName(cfg: Record<string, unknown>): string | undefined {
 }
 
 export function CommandCenterClient() {
-  const [orgId, setOrg] = useState<string>("org_test");
+  const [orgId, setOrg] = useState<string>("—");
+  const [resolvedOrgId, setResolvedOrgId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<Awaited<ReturnType<typeof fetchOrgAgents>> | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const id = getOrgId() || "org_test";
-    setOrg(id);
+    const id = getOrgId();
+    setResolvedOrgId(id);
+    setOrg(id || "—");
+    if (!id) {
+      setLoading(false);
+      return;
+    }
     fetchOrgAgents(id)
       .then((d) => setData(d))
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to load"))
@@ -35,6 +41,12 @@ export function CommandCenterClient() {
 
       {loading ? <div className="text-sm text-muted-foreground">Loading...</div> : null}
       {error ? <div className="text-sm text-red-600">{error}</div> : null}
+
+      {!resolvedOrgId && !loading ? (
+        <div className="text-sm text-muted-foreground">
+          Sign in to load your organization context.
+        </div>
+      ) : null}
 
       <div className="grid gap-4 md:grid-cols-2">
         {data?.agents?.map((a) => (

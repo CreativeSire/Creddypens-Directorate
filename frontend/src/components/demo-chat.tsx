@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import { executeAgent } from "@/lib/api";
 import { getOrgId } from "@/lib/org";
@@ -13,14 +13,13 @@ export function DemoChat({ agentCode, companyName }: { agentCode: string; compan
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const orgId = useMemo(() => getOrgId() || "org_test", []);
-
   async function onSend() {
     setBusy(true);
     setError(null);
     setReply(null);
     setMeta(null);
     try {
+      const orgId = getOrgId() || "org_test";
       const res = await executeAgent({
         code: agentCode,
         orgId,

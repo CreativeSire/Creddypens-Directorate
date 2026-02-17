@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Menu, Shield } from "lucide-react";
@@ -25,13 +25,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  const orgName = useMemo(() => {
-    const orgId = getOrgId();
-    return orgId ? orgId : "org_test";
-  }, []);
+  const [orgName, setOrgName] = useState<string>("—");
 
   useEffect(() => {
     setCollapsed(getInitialCollapsed());
+  }, []);
+
+  useEffect(() => {
+    setOrgName(getOrgId() || "—");
   }, []);
 
   const toggleCollapsed = useCallback(() => {
@@ -155,4 +156,3 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     </div>
   );
 }
-
