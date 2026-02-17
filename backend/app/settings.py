@@ -1,7 +1,15 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+from dotenv import load_dotenv
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+# Ensure provider SDKs (e.g. LiteLLM) can see API keys from `backend/.env` via os.environ.
+# Pydantic's env_file loads values for Settings, but does not automatically populate process env vars.
+load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / ".env", override=False)
 
 
 class Settings(BaseSettings):
