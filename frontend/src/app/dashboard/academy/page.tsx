@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { toast } from "sonner";
 
 import { apiBaseUrl } from "@/lib/env";
 import { getOrgId } from "@/lib/org";
+import { toast } from "@/lib/toast";
 import { Skeleton } from "@/components/ui/skeleton";
 
 type AcademyStatus = {
@@ -74,12 +74,12 @@ export default function AcademyPage() {
         body: JSON.stringify({ org_id: orgId, run_type: "synthetic", scenario_count: 100 }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      toast.success("Training completed", { id: toastId });
+      toast.success("Training completed", toastId);
       setLoading(true);
       const refreshed = await fetchStatus(orgId);
       setStatus(refreshed);
     } catch {
-      toast.error("Training failed", { id: toastId });
+      toast.error("Training failed", toastId);
     } finally {
       setLoading(false);
     }

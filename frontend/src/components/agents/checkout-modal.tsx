@@ -1,11 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { toast } from "sonner";
 
 import { X, Check, CreditCard } from "lucide-react";
 
 import { apiBaseUrl } from "@/lib/env";
+import { toast } from "@/lib/toast";
 
 type CheckoutModalProps = {
   agent: {
@@ -46,15 +46,15 @@ export function CheckoutModal({ agent, orgId, onClose, onSuccess }: CheckoutModa
       setCheckoutMode(data.mode || null);
 
       if (data.mode === "stripe" && data.checkout_url) {
-        toast.success("Redirecting to secure checkout...", { id: toastId });
+        toast.success("Redirecting to secure checkout...", toastId);
         window.location.assign(data.checkout_url);
         return;
       }
 
-      toast.success(`Deployment authorized for ${agent.code}`, { id: toastId });
+      toast.success(`Deployment authorized for ${agent.code}`, toastId);
       setTimeout(() => onSuccess(), 700);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Checkout failed", { id: toastId });
+      toast.error(err instanceof Error ? err.message : "Checkout failed", toastId);
       setError(err instanceof Error ? err.message : "Checkout failed");
       setProcessing(false);
     }
@@ -68,7 +68,7 @@ export function CheckoutModal({ agent, orgId, onClose, onSuccess }: CheckoutModa
             <div className="text-xs text-[#FFB800] tracking-[0.25em] mb-1">DEPLOYMENT AUTHORIZATION</div>
             <div className="text-2xl text-white font-semibold">Hire {agent.code}</div>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-[#00F0FF]/10 transition-colors" disabled={processing}>
+          <button onClick={onClose} className="p-2 hover:bg-[#00F0FF]/10 transition-colors focus-ring" disabled={processing}>
             <X className="w-5 h-5 text-white/70" />
           </button>
         </div>
@@ -125,7 +125,7 @@ export function CheckoutModal({ agent, orgId, onClose, onSuccess }: CheckoutModa
           <div className="flex gap-3">
             <button
               onClick={onClose}
-              className="flex-1 border border-[#00F0FF]/30 text-[#00F0FF] py-3 text-sm tracking-[0.25em] hover:bg-[#00F0FF]/10 transition-all"
+              className="flex-1 border border-[#00F0FF]/30 text-[#00F0FF] py-3 text-sm tracking-[0.25em] hover:bg-[#00F0FF]/10 transition-all focus-ring"
               disabled={processing}
             >
               CANCEL
@@ -133,7 +133,7 @@ export function CheckoutModal({ agent, orgId, onClose, onSuccess }: CheckoutModa
             <button
               onClick={() => void handleCheckout()}
               disabled={processing}
-              className="flex-1 bg-[#FFB800] hover:bg-[#FFB800]/90 disabled:bg-white/10 disabled:text-white/40 disabled:cursor-not-allowed text-[#0A0F14] py-3 text-sm font-bold tracking-[0.25em] transition-all flex items-center justify-center gap-2"
+              className="flex-1 bg-[#FFB800] hover:bg-[#FFB800]/90 disabled:bg-white/10 disabled:text-white/40 disabled:cursor-not-allowed text-[#0A0F14] py-3 text-sm font-bold tracking-[0.25em] transition-all flex items-center justify-center gap-2 focus-ring"
             >
               {processing ? (
                 <>

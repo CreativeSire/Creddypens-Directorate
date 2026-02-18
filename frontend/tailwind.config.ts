@@ -10,6 +10,12 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
+        void: "#0A0F14",
+        "void-2": "#0D1520",
+        cyan: "#00F0FF",
+        amber: "#FFB800",
+        green: "#00FF00",
+        red: "#FF4444",
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
         ring: "hsl(var(--ring))",

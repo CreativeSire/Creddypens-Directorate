@@ -3,6 +3,8 @@ import localFont from "next/font/local";
 import { Analytics } from "@vercel/analytics/react";
 import { SpeedInsights } from "@vercel/speed-insights/next";
 import { Toaster } from "sonner";
+import { PageTransition } from "@/components/layout/page-transition";
+import { ScrollToTop } from "@/components/ui/scroll-to-top";
 import "./globals.css";
 
 const geistSans = localFont({
@@ -28,9 +30,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
-        {children}
-        <Toaster position="top-right" richColors />
+      <body className={`${geistSans.variable} ${geistMono.variable} antialiased bg-void text-white`}>
+        <PageTransition>{children}</PageTransition>
+        <ScrollToTop />
+        <Toaster position="top-right" richColors closeButton />
         <Analytics />
         <SpeedInsights />
       </body>

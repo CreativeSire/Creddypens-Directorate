@@ -17,7 +17,7 @@ export function AgentCard({ agent }: { agent: Agent }) {
     <motion.div
       whileHover={{ y: -4, scale: 1.02 }}
       transition={{ duration: 0.2 }}
-      className="border border-[#00F0FF]/30 bg-[#0D1520] p-5 hover:border-[#FFB800]/60 transition-colors"
+      className="border border-[#00F0FF]/30 bg-[#0D1520] p-5 hover:border-[#FFB800]/60 transition-colors hover:shadow-xl hover:shadow-cyan/10"
     >
       <div className="flex items-start justify-between gap-4">
         <div>
@@ -52,7 +52,7 @@ export function AgentCard({ agent }: { agent: Agent }) {
         {active ? (
           <Link
             href={`/dashboard/agents/${encodeURIComponent(agent.code)}`}
-            className="px-4 py-2 bg-[#FFB800] text-[#0A0F14] font-bold hover:bg-[#FFB800]/90"
+            className="px-4 py-2 bg-[#FFB800] text-[#0A0F14] font-bold hover:bg-[#FFB800]/90 focus-ring"
           >
             VIEW DOSSIER
           </Link>

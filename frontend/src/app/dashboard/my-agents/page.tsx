@@ -1,12 +1,27 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { toast } from "sonner";
+import { Users } from "lucide-react";
+import dynamic from "next/dynamic";
 
 import { apiBaseUrl } from "@/lib/env";
 import { getOrgId } from "@/lib/org";
+import { toast } from "@/lib/toast";
 import { HiredAgentCard } from "@/components/agents/hired-agent-card";
-import { AgentChatModal } from "@/components/agents/agent-chat-modal";
+import { EmptyState } from "@/components/ui/empty-state";
+import { MyAgentsSkeleton } from "@/components/skeletons/my-agents-skeleton";
+import { ChatSkeleton } from "@/components/skeletons/chat-skeleton";
+
+const AgentChatModal = dynamic(() => import("@/components/agents/agent-chat-modal").then((m) => m.AgentChatModal), {
+  ssr: false,
+  loading: () => (
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-6">
+      <div className="w-full max-w-3xl border border-cyan/30 bg-cyan/5">
+        <ChatSkeleton />
+      </div>
+    </div>
+  ),
+});
 
 type HiredAgent = {
   id: string;
@@ -47,7 +62,7 @@ export default function MyAgentsPage() {
     if (checkout === "success") {
       toast.success("Checkout complete. Agent deployment is now active.");
     } else if (checkout === "cancelled") {
-      toast.message("Checkout canceled. No changes were applied.");
+      toast.info("Checkout canceled. No changes were applied.");
     }
     url.searchParams.delete("checkout");
     window.history.replaceState({}, "", url.toString());
@@ -90,11 +105,7 @@ export default function MyAgentsPage() {
   }, [filter, hiredAgents]);
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-[#00F0FF]/60">Loading your agents...</div>
-      </div>
-    );
+    return <MyAgentsSkeleton />;
   }
 
   if (!orgId) {
@@ -115,19 +126,12 @@ export default function MyAgentsPage() {
 
   if (hiredAgents.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center h-64 border border-[#00F0FF]/30 bg-[#00F0FF]/5 p-10">
-        <div className="text-xs text-[#00F0FF] tracking-[0.25em] mb-4">{"// NO AGENTS DEPLOYED"}</div>
-        <h2 className="text-2xl text-white font-semibold mb-2 tracking-wide">Your Workforce Awaits</h2>
-        <p className="text-[#00F0FF]/60 text-sm mb-6 max-w-md text-center">
-          Browse the marketplace and hire your first agent to get started.
-        </p>
-        <button
-          className="px-6 py-3 bg-[#FFB800] text-[#0A0F14] font-bold tracking-[0.25em] hover:bg-[#FFB800]/90"
-          onClick={() => (window.location.href = "/dashboard/departments/customer-experience")}
-        >
-          BROWSE MARKETPLACE
-        </button>
-      </div>
+      <EmptyState
+        icon={Users}
+        title="No Agents Deployed Yet"
+        description="Browse departments and deploy your first specialist. Deployed agents appear here with live operational stats."
+        action={{ label: "Browse All Departments", onClick: () => (window.location.href = "/dashboard/departments/customer-experience") }}
+      />
     );
   }
 

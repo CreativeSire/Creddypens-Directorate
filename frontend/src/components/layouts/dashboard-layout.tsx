@@ -2,11 +2,13 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { Menu, Shield } from "lucide-react";
+import { Shield } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { getOrgId } from "@/lib/org";
+import { supabase } from "@/lib/supabase";
+import { toast } from "@/lib/toast";
+import { MobileNav } from "@/components/layout/mobile-nav";
 import Sidebar from "@/components/navigation/sidebar";
 
 const SIDEBAR_KEY = "creddypens_sidebar_collapsed";
@@ -21,9 +23,7 @@ function getInitialCollapsed() {
 }
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
-  const [mobileOpen, setMobileOpen] = useState(false);
 
   const [orgName, setOrgName] = useState<string>("—");
 
@@ -60,12 +60,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [toggleCollapsed]);
 
-  // Close mobile drawer on route change
-  useEffect(() => {
-    setMobileOpen(false);
-  }, [pathname]);
-
   const sidebarWidth = collapsed ? 72 : 260;
+
+  async function handleLogout() {
+    await supabase.auth.signOut();
+    toast.success("Logged out successfully");
+    window.location.href = "/login";
+  }
 
   return (
     <div className="min-h-screen bg-[#0A0F14] text-[#00F0FF] font-mono">
@@ -73,13 +74,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       <div className="fixed top-0 left-0 right-0 h-[60px] z-[100] border-b border-[#00F0FF]/30 bg-[rgba(10,15,20,0.95)] backdrop-blur">
         <div className="h-full px-6 flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <button
-              className="md:hidden p-2 border border-[#00F0FF]/30 hover:bg-[#00F0FF]/10"
-              onClick={() => setMobileOpen(true)}
-              aria-label="Open sidebar"
-            >
-              <Menu className="w-5 h-5" />
-            </button>
+            <MobileNav />
             <Link href="/" className="flex items-center gap-3">
               <Shield className="w-6 h-6 text-[#00F0FF]" />
               <div className="leading-none">
@@ -94,7 +89,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               ORG: <span className="text-white">{orgName}</span>
             </div>
             <details className="relative">
-              <summary className="list-none cursor-pointer px-4 py-2 border border-[#00F0FF]/30 hover:bg-[#00F0FF]/10">
+              <summary className="list-none cursor-pointer px-4 py-2 border border-[#00F0FF]/30 hover:bg-[#00F0FF]/10 focus-ring">
                 USER MENU
               </summary>
               <div className="absolute right-0 mt-2 w-56 border border-[#00F0FF]/30 bg-[#0D1520]">
@@ -105,13 +100,16 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 <div className="p-2 flex flex-col">
                   <Link
                     href="/dashboard/settings"
-                    className="px-3 py-2 text-sm text-[#00F0FF] hover:bg-[#00F0FF]/10"
+                    className="px-3 py-2 text-sm text-[#00F0FF] hover:bg-[#00F0FF]/10 focus-ring"
                   >
                     Settings
                   </Link>
-                  <Link href="/login" className="px-3 py-2 text-sm text-[#FFB800] hover:bg-[#FFB800]/10">
+                  <button
+                    onClick={() => void handleLogout()}
+                    className="px-3 py-2 text-left text-sm text-[#FFB800] hover:bg-[#FFB800]/10 focus-ring"
+                  >
                     Logout
-                  </Link>
+                  </button>
                 </div>
               </div>
             </details>
@@ -128,20 +126,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       >
         <Sidebar collapsed={collapsed} onToggleCollapsed={toggleCollapsed} />
       </div>
-
-      {/* Sidebar (mobile drawer) */}
-      {mobileOpen ? (
-        <div className="md:hidden fixed inset-0 z-[200]">
-          <button
-            className="absolute inset-0 bg-black/60"
-            onClick={() => setMobileOpen(false)}
-            aria-label="Close sidebar"
-          />
-          <div className="absolute left-0 top-0 bottom-0 w-[260px] bg-[#0D1520] border-r border-[#00F0FF]/30 pt-[60px]">
-            <Sidebar collapsed={false} onToggleCollapsed={() => {}} />
-          </div>
-        </div>
-      ) : null}
 
       {/* Main */}
       <main

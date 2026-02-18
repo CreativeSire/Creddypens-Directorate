@@ -7,6 +7,7 @@ import { motion } from "framer-motion";
 
 import type { Agent } from "@/lib/types";
 import { Skeleton } from "@/components/ui/skeleton";
+import { EmptyState } from "@/components/ui/empty-state";
 
 type Department = {
   id: number;
@@ -158,7 +159,7 @@ export default function Landing({ agents, loading }: { agents: Agent[]; loading?
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="IDENTIFY YOUR NEED: [e.g., 'Receptionist', 'Sales Agent', 'Bookkeeper']"
-                className="w-full px-6 py-4 bg-transparent text-[#00F0FF] placeholder-[#00F0FF]/40 focus:outline-none"
+                className="w-full px-6 py-4 bg-transparent text-[#00F0FF] placeholder-[#00F0FF]/40 focus:outline-none focus-ring"
                 onFocus={() => setScanActive(true)}
                 onBlur={() => setScanActive(false)}
               />
@@ -258,6 +259,15 @@ export default function Landing({ agents, loading }: { agents: Agent[]; loading?
                 <Skeleton className="h-10 w-full" />
               </div>
             ))
+          ) : filteredFeatured.length === 0 && query ? (
+            <div className="col-span-full">
+              <EmptyState
+                icon={Search}
+                title="No Agents Found"
+                description={`No featured agents match "${query}". Try a different keyword.`}
+                action={{ label: "Clear Search", onClick: () => setQuery("") }}
+              />
+            </div>
           ) : (
             filteredFeatured.map((agent, idx) => (
               <motion.div

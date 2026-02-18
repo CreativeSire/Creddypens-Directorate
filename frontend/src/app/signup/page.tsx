@@ -7,6 +7,7 @@ import { useState } from "react";
 import { apiBaseUrl } from "@/lib/env";
 import { setOrgId } from "@/lib/org";
 import { supabase } from "@/lib/supabase";
+import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
 
 async function bootstrapOrg(accessToken: string) {
@@ -37,26 +38,29 @@ export default function SignupPage() {
 
       const boot = await bootstrapOrg(token);
       setOrgId(boot.org_id);
+      toast.success("Account created successfully.");
       router.push("/command-center");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Signup failed");
+      const message = e instanceof Error ? e.message : "Signup failed";
+      setError(message);
+      toast.error("Failed to create account. Please try again.");
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-8">
-      <div className="w-full max-w-md rounded-2xl border p-6 space-y-4">
+    <div className="min-h-screen flex items-center justify-center p-8 bg-void text-white">
+      <div className="w-full max-w-md rounded-2xl border border-cyan/30 bg-void-2 p-6 space-y-4">
         <div className="space-y-1">
           <h1 className="text-2xl font-semibold">Sign up</h1>
-          <div className="text-sm text-muted-foreground">Create your clearance.</div>
+          <div className="text-sm text-white/60">Create your clearance.</div>
         </div>
         <form className="space-y-3" onSubmit={onSubmit}>
           <div className="space-y-1">
             <label className="text-sm">Email</label>
             <input
-              className="w-full h-10 rounded-md border bg-background px-3 text-sm"
+              className="w-full h-11 rounded-md border border-cyan/30 bg-void px-3 text-sm focus-ring"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               type="email"
@@ -66,7 +70,7 @@ export default function SignupPage() {
           <div className="space-y-1">
             <label className="text-sm">Password</label>
             <input
-              className="w-full h-10 rounded-md border bg-background px-3 text-sm"
+              className="w-full h-11 rounded-md border border-cyan/30 bg-void px-3 text-sm focus-ring"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               type="password"
@@ -74,14 +78,14 @@ export default function SignupPage() {
               required
             />
           </div>
-          {error ? <div className="text-sm text-red-600">{error}</div> : null}
+          {error ? <div className="text-sm text-red-400">{error}</div> : null}
           <Button className="w-full" disabled={busy}>
             {busy ? "Creating..." : "Create account"}
           </Button>
         </form>
-        <div className="text-sm text-muted-foreground">
+        <div className="text-sm text-white/60">
           Already have access?{" "}
-          <Link className="underline underline-offset-4" href="/login">
+          <Link className="underline underline-offset-4 focus-ring" href="/login">
             Login
           </Link>
         </div>
@@ -89,4 +93,3 @@ export default function SignupPage() {
     </div>
   );
 }
-

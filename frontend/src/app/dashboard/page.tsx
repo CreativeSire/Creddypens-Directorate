@@ -1,5 +1,12 @@
-import DirectorChat from "@/components/director/director-chat";
-import StatsPanel from "@/components/dashboard/stats-panel";
+import dynamic from "next/dynamic";
+import { Skeleton } from "@/components/ui/skeleton";
+
+const DirectorChat = dynamic(() => import("@/components/director/director-chat"), {
+  loading: () => <Skeleton className="h-[520px] border border-cyan/30" />,
+});
+const StatsPanel = dynamic(() => import("@/components/dashboard/stats-panel"), {
+  loading: () => <Skeleton className="h-[520px] border border-cyan/30" />,
+});
 
 export default function DashboardPage() {
   return (
@@ -9,4 +16,3 @@ export default function DashboardPage() {
     </div>
   );
 }
-

@@ -5,10 +5,12 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import CountUp from "react-countup";
 import { AnimatePresence, motion } from "framer-motion";
+import { Activity } from "lucide-react";
 
 import { apiBaseUrl } from "@/lib/env";
 import { getOrgId } from "@/lib/org";
-import { Skeleton } from "@/components/ui/skeleton";
+import { StatsSkeleton } from "@/components/skeletons/stats-skeleton";
+import { EmptyState } from "@/components/ui/empty-state";
 
 type StatCardProps = {
   label: string;
@@ -104,16 +106,7 @@ export default function StatsPanel() {
   }
 
   if (loading) {
-    return (
-      <div className="space-y-4">
-        <div className="grid grid-cols-2 gap-3">
-          {[1, 2, 3, 4].map((item) => (
-            <Skeleton key={item} className="h-20 w-full border border-[#00F0FF]/20" />
-          ))}
-        </div>
-        <Skeleton className="h-64 w-full border border-[#00F0FF]/20" />
-      </div>
-    );
+    return <StatsSkeleton />;
   }
 
   if (!stats) {
@@ -136,7 +129,11 @@ export default function StatsPanel() {
         </div>
 
         {stats.recent_activities.length === 0 ? (
-          <div className="text-sm text-[#00F0FF]/60 py-6 text-center">No activity yet. Run a demo chat to begin.</div>
+          <EmptyState
+            icon={Activity}
+            title="No Recent Activity"
+            description="Your agent interactions will appear here. Start chatting with deployed agents to populate the feed."
+          />
         ) : (
           <div className="space-y-2 max-h-[420px] overflow-y-auto">
             <AnimatePresence mode="popLayout" initial={false}>

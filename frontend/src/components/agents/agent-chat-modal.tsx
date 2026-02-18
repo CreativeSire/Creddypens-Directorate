@@ -6,6 +6,7 @@ import { X, Send } from "lucide-react";
 
 import { apiBaseUrl } from "@/lib/env";
 import type { AgentDetail, ExecuteResponse } from "@/lib/types";
+import { ChatSkeleton } from "@/components/skeletons/chat-skeleton";
 
 type Message = {
   role: "user" | "agent";
@@ -150,8 +151,10 @@ export function AgentChatModal({ agentCode, orgId, onClose, onAfterMessage }: Ag
 
   if (!agent) {
     return (
-      <div className="fixed inset-0 bg-[#0A0F14]/95 flex items-center justify-center z-50">
-        <div className="text-[#00F0FF]/60">Loading agent...</div>
+      <div className="fixed inset-0 bg-[#0A0F14]/95 flex items-center justify-center z-50 p-6">
+        <div className="w-full max-w-3xl border border-cyan/30 bg-cyan/5">
+          <ChatSkeleton />
+        </div>
       </div>
     );
   }
@@ -170,7 +173,7 @@ export function AgentChatModal({ agentCode, orgId, onClose, onAfterMessage }: Ag
           </div>
         </div>
 
-        <button onClick={onClose} className="p-2 hover:bg-[#00F0FF]/10 transition-colors group" aria-label="Close">
+        <button onClick={onClose} className="p-2 hover:bg-[#00F0FF]/10 transition-colors group focus-ring" aria-label="Close">
           <X className="w-5 h-5 text-[#00F0FF]/60 group-hover:text-[#00F0FF]" />
         </button>
       </div>
@@ -239,14 +242,14 @@ export function AgentChatModal({ agentCode, orgId, onClose, onAfterMessage }: Ag
               }
             }}
             placeholder="Give this agent a task..."
-            className="flex-1 resize-none bg-[#00F0FF]/5 border border-[#00F0FF]/30 px-4 py-3 text-[#00F0FF] placeholder-[#00F0FF]/30 focus:outline-none focus:border-[#00F0FF] font-mono text-sm"
+            className="flex-1 resize-none bg-[#00F0FF]/5 border border-[#00F0FF]/30 px-4 py-3 text-[#00F0FF] placeholder-[#00F0FF]/30 focus:outline-none focus:border-[#00F0FF] focus-ring font-mono text-sm"
             rows={2}
             disabled={loading}
           />
           <button
             onClick={() => void sendMessage()}
             disabled={loading || !input.trim()}
-            className="bg-[#FFB800] hover:bg-[#FFB800]/90 disabled:bg-white/10 disabled:text-white/40 disabled:cursor-not-allowed px-6 py-3 flex items-center gap-2 text-[#0A0F14] font-bold text-sm tracking-[0.25em] transition-all"
+            className="bg-[#FFB800] hover:bg-[#FFB800]/90 disabled:bg-white/10 disabled:text-white/40 disabled:cursor-not-allowed px-6 py-3 flex items-center gap-2 text-[#0A0F14] font-bold text-sm tracking-[0.25em] transition-all focus-ring"
           >
             <Send className="w-4 h-4" />
             SEND
