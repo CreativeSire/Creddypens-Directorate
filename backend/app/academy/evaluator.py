@@ -63,6 +63,25 @@ class ResponseEvaluator:
         self.provider = os.getenv("ACADEMY_JUDGE_PROVIDER", "anthropic").strip() or "anthropic"
         self.model = os.getenv("ACADEMY_JUDGE_MODEL", "claude-sonnet-4-5-20250929").strip() or "claude-sonnet-4-5-20250929"
 
+    def evaluate_sync(
+        self,
+        *,
+        user_message: str,
+        agent_response: str,
+        agent_role: str,
+        expected_qualities: list[str] | None = None,
+    ) -> dict[str, Any]:
+        subscores = self._judge_all_sync(
+            user_message=user_message,
+            agent_response=agent_response,
+            agent_role=agent_role,
+            expected_qualities=expected_qualities or [],
+        )
+        overall = 0.0
+        for criterion, details in self.EVALUATION_CRITERIA.items():
+            overall += float(subscores.get(criterion, 50.0)) * float(details["weight"])
+        return {"overall": round(overall, 2), "subscores": subscores}
+
     async def evaluate(
         self,
         *,
@@ -80,20 +99,16 @@ class ResponseEvaluator:
           "subscores": { "helpfulness": 80, ... }
         }
         """
-        subscores = await self._judge_all(
-            user_message=user_message,
-            agent_response=agent_response,
-            agent_role=agent_role,
-            expected_qualities=expected_qualities or [],
+        return await anyio.to_thread.run_sync(
+            lambda: self.evaluate_sync(
+                user_message=user_message,
+                agent_response=agent_response,
+                agent_role=agent_role,
+                expected_qualities=expected_qualities,
+            )
         )
 
-        overall = 0.0
-        for criterion, details in self.EVALUATION_CRITERIA.items():
-            overall += float(subscores.get(criterion, 50.0)) * float(details["weight"])
-
-        return {"overall": round(overall, 2), "subscores": subscores}
-
-    async def _judge_all(
+    def _judge_all_sync(
         self,
         *,
         user_message: str,
@@ -137,13 +152,11 @@ Return JSON only, example:
 """
 
         try:
-            result = await anyio.to_thread.run_sync(
-                lambda: execute_via_litellm(
-                    provider=self.provider,
-                    model=self.model,
-                    system=judge_system,
-                    user=judge_user,
-                )
+            result = execute_via_litellm(
+                provider=self.provider,
+                model=self.model,
+                system=judge_system,
+                user=judge_user,
             )
             text = (result.get("response") or result.get("content") or result.get("text") or "").strip()
             data = _extract_json_object(text)
