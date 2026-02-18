@@ -20,6 +20,6 @@ class ExecuteOut(BaseModel):
     response: str
     model_used: str
     latency_ms: int
+    tokens_used: int = 0
     trace_id: str
     session_id: str
-

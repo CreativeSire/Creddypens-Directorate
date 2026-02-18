@@ -10,6 +10,7 @@ from sqlalchemy import bindparam, text
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from app.db import engine
+from app.schema import ensure_schema
 
 
 DATA_PATH = Path(__file__).resolve().parents[1] / "data" / "agent_dossiers.json"
@@ -87,6 +88,37 @@ ACTIVE_ROUTES = {
     },
 }
 
+DEFAULT_ROUTE = {
+    "llm_profile": {"default": "claude_sonnet"},
+    "llm_provider": "anthropic",
+    "llm_model": "claude-sonnet-4-5-20250929",
+}
+
+
+def build_default_system_prompt(item: dict, code: str) -> str:
+    human_name = (item.get("human_name") or "").strip() or code
+    role = (item.get("role") or "").strip() or "specialized AI professional"
+    department = DEPARTMENT_MAP.get(str(item.get("department", "")).strip(), str(item.get("department", "")).strip() or "Directorate")
+    description = (item.get("description") or "").strip()
+    capabilities = item.get("capabilities") or []
+    cap_lines = []
+    for capability in capabilities[:8]:
+        text_value = str(capability).strip()
+        if text_value:
+            cap_lines.append(f"- {text_value}")
+    caps_text = "\n".join(cap_lines) if cap_lines else "- Execute assigned tasks accurately and professionally."
+
+    return (
+        f"You are {code} ({human_name}), a {role} in {department} at The CreddyPens Directorate.\n"
+        "Operate as an elite AI employee: clear, professional, outcome-driven, and aligned to the client context.\n\n"
+        f"Mission:\n{description}\n\n"
+        f"Core capabilities:\n{caps_text}\n\n"
+        "Safety boundaries:\n"
+        "- Do not provide definitive legal advice, financial advice, or medical diagnosis.\n"
+        "- Do not fabricate facts, policies, or pricing details that were not provided by the client.\n"
+        "- If asked to act outside your scope, state the limitation clearly and suggest the right escalation path.\n"
+    ).strip()
+
 
 def load_dossiers() -> list[dict]:
     if not DATA_PATH.exists():
@@ -99,7 +131,8 @@ def load_dossiers() -> list[dict]:
 
 def to_seed_row(item: dict) -> dict:
     code = canonical_code(str(item.get("code", "")).strip())
-    route = ACTIVE_ROUTES.get(code)
+    route = ACTIVE_ROUTES.get(code, DEFAULT_ROUTE)
+    system_prompt = route.get("system_prompt") or build_default_system_prompt(item, code)
     return {
         "agent_id": code.lower(),
         "code": code,
@@ -115,15 +148,16 @@ def to_seed_row(item: dict) -> dict:
         "communication_style": str(item.get("communication_style", "")).strip() or None,
         "department": DEPARTMENT_MAP.get(str(item.get("department", "")).strip(), str(item.get("department", "")).strip()),
         "price_cents": int(item.get("price_cents") or 0),
-        "status": "active" if code in {"Author-01", "Assistant-01", "Greeter-01"} else "coming_soon",
-        "llm_profile": route["llm_profile"] if route else {"default": "tbd"},
-        "llm_provider": route["llm_provider"] if route else None,
-        "llm_model": route["llm_model"] if route else None,
-        "system_prompt": route["system_prompt"] if route else "",
+        "status": "active",
+        "llm_profile": route["llm_profile"],
+        "llm_provider": route["llm_provider"],
+        "llm_model": route["llm_model"],
+        "system_prompt": system_prompt,
     }
 
 
 def main() -> None:
+    ensure_schema(engine)
     dossiers = load_dossiers()
     rows = [to_seed_row(item) for item in dossiers]
     expected_agent_ids = [row["agent_id"] for row in rows]

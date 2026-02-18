@@ -61,6 +61,7 @@ def execute_via_litellm(
             "model_used": model_used,
             "latency_ms": latency_ms,
             "response": reply,
+            "tokens_used": max(1, len(user.split()) * 2),
         }
 
     try:
@@ -136,5 +137,6 @@ def execute_via_litellm(
         "model_used": model_used,
         "latency_ms": latency_ms,
         "response": text,
+        "tokens_used": int((data.get("usage") or {}).get("total_tokens") or 0),
         "raw": data,
     }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { toast } from "sonner";
 
 import { X, Check, CreditCard } from "lucide-react";
 
@@ -24,6 +25,7 @@ export function CheckoutModal({ agent, orgId, onClose, onSuccess }: CheckoutModa
   const price = Math.floor((agent.price_cents || 0) / 100);
 
   const handleCheckout = async () => {
+    const toastId = toast.loading("Authorizing deployment...");
     setProcessing(true);
     setError(null);
     try {
@@ -37,10 +39,12 @@ export function CheckoutModal({ agent, orgId, onClose, onSuccess }: CheckoutModa
       const data = (await res.json().catch(() => ({}))) as { detail?: string };
       if (!res.ok) throw new Error(data.detail || "Checkout failed");
 
+      toast.success(`Deployment authorized for ${agent.code}`, { id: toastId });
       setTimeout(() => {
         onSuccess();
       }, 700);
     } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Checkout failed", { id: toastId });
       setError(err instanceof Error ? err.message : "Checkout failed");
       setProcessing(false);
     }

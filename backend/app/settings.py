@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     # Supabase Auth (frontend uses anon key; backend uses it to validate access tokens)
     supabase_url: str | None = Field(default=None, validation_alias="SUPABASE_URL")
     supabase_anon_key: str | None = Field(default=None, validation_alias="SUPABASE_ANON_KEY")
+    sentry_dsn: str | None = Field(default=None, validation_alias="SENTRY_DSN")
 
 
 settings = Settings()

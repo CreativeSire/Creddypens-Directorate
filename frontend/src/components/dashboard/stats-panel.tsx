@@ -8,6 +8,7 @@ import { AnimatePresence, motion } from "framer-motion";
 
 import { apiBaseUrl } from "@/lib/env";
 import { getOrgId } from "@/lib/org";
+import { Skeleton } from "@/components/ui/skeleton";
 
 type StatCardProps = {
   label: string;
@@ -43,6 +44,7 @@ type DashboardStats = {
   active_agents_count: number;
   tasks_this_week: number;
   avg_response_time_ms: number;
+  avg_quality_score?: number;
   recent_activities: Array<{
     agent_code: string;
     agent_name: string;
@@ -102,7 +104,16 @@ export default function StatsPanel() {
   }
 
   if (loading) {
-    return <div className="text-[#00F0FF]/60 text-sm">Loading stats...</div>;
+    return (
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-3">
+          {[1, 2, 3, 4].map((item) => (
+            <Skeleton key={item} className="h-20 w-full border border-[#00F0FF]/20" />
+          ))}
+        </div>
+        <Skeleton className="h-64 w-full border border-[#00F0FF]/20" />
+      </div>
+    );
   }
 
   if (!stats) {
@@ -116,6 +127,7 @@ export default function StatsPanel() {
         <StatCard label="ACTIVE NOW" value={stats.active_agents_count} color="green" />
         <StatCard label="TASKS THIS WEEK" value={stats.tasks_this_week} color="amber" />
         <StatCard label="AVG RESPONSE" value={`${(stats.avg_response_time_ms / 1000).toFixed(1)}s`} color="cyan" />
+        <StatCard label="AVG QUALITY" value={(stats.avg_quality_score ?? 0).toFixed(2)} color="green" />
       </div>
 
       <div className="border border-[#00F0FF]/30 bg-[#00F0FF]/5 p-4">

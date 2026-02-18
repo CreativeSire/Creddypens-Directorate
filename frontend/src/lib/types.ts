@@ -34,6 +34,7 @@ export type ExecuteResponse = {
   response: string;
   model_used: string;
   latency_ms: number;
+  tokens_used?: number;
   trace_id: string;
   session_id: string;
 };

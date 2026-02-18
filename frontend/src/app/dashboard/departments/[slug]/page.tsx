@@ -69,7 +69,13 @@ export default async function DepartmentPage({ params }: { params: { slug: strin
       </div>
 
       {agents.length === 0 ? (
-        <div className="text-center text-[#00F0FF]/60 py-16">No agents in this department yet</div>
+        <div className="border-2 border-dashed border-[#00F0FF]/30 p-16 text-center bg-[#00F0FF]/5">
+          <div className="text-xs text-[#00F0FF] tracking-[0.25em] mb-3">{"// DEPARTMENT EMPTY"}</div>
+          <h3 className="text-2xl text-white mb-2">No Agents in This Department</h3>
+          <p className="text-[#00F0FF]/60 text-sm max-w-md mx-auto">
+            Agents are currently being retrained in The Academy. Check back soon or explore other departments.
+          </p>
+        </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {agents.map((agent) => (

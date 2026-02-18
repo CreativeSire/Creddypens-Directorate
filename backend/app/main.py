@@ -10,6 +10,14 @@ from app.settings import settings
 
 app = FastAPI(title="CreddyPens API", version="0.1.0")
 
+if settings.sentry_dsn:
+    try:
+        import sentry_sdk
+
+        sentry_sdk.init(dsn=settings.sentry_dsn, traces_sample_rate=0.1)
+    except Exception:
+        pass
+
 allowed_origins = [o.strip() for o in settings.allowed_origins.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,

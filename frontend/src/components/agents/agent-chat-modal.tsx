@@ -14,6 +14,7 @@ type Message = {
   metadata?: {
     model_used?: string;
     latency_ms?: number;
+    tokens_used?: number;
   };
 };
 
@@ -126,6 +127,9 @@ export function AgentChatModal({ agentCode, orgId, onClose, onAfterMessage }: Ag
         timestamp: new Date().toISOString(),
         metadata: { model_used: data.model_used, latency_ms: data.latency_ms },
       };
+      if (typeof data.tokens_used === "number") {
+        agentMsg.metadata = { ...agentMsg.metadata, tokens_used: data.tokens_used };
+      }
       setMessages((prev) => [...prev, agentMsg]);
       onAfterMessage?.();
     } catch (err) {
@@ -190,7 +194,11 @@ export function AgentChatModal({ agentCode, orgId, onClose, onAfterMessage }: Ag
               </div>
 
               <div className="mt-2 text-xs text-[#00F0FF]/40 font-mono">
-                {msg.metadata ? `Response Time • ${msg.metadata.latency_ms ?? 0}ms` : new Date(msg.timestamp).toLocaleTimeString()}
+                {msg.metadata
+                  ? `Response Time • ${msg.metadata.latency_ms ?? 0}ms${
+                      msg.metadata.tokens_used ? ` • ${msg.metadata.tokens_used} tokens` : ""
+                    }`
+                  : new Date(msg.timestamp).toLocaleTimeString()}
               </div>
             </div>
           </div>

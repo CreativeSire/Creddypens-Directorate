@@ -110,16 +110,16 @@ export default function Landing({ agents, loading }: { agents: Agent[]; loading?
                 <p className="text-xs text-[#00F0FF]/60 tracking-widest">CLASSIFIED // LEVEL 5 ACCESS</p>
               </div>
             </div>
-            <div className="flex gap-4">
+            <div className="flex gap-2 sm:gap-4">
               <Link
                 href="/login"
-                className="px-4 py-2 border border-[#00F0FF]/50 hover:bg-[#00F0FF]/10 transition-all"
+                className="px-3 sm:px-4 py-2 text-xs sm:text-sm border border-[#00F0FF]/50 hover:bg-[#00F0FF]/10 transition-all"
               >
                 ACCESS PORTAL
               </Link>
               <Link
                 href="/signup"
-                className="px-4 py-2 bg-[#FFB800] text-[#0A0F14] font-bold hover:bg-[#FFB800]/90 transition-all"
+                className="px-3 sm:px-4 py-2 text-xs sm:text-sm bg-[#FFB800] text-[#0A0F14] font-bold hover:bg-[#FFB800]/90 transition-all"
               >
                 REQUEST ACCESS
               </Link>
@@ -139,7 +139,7 @@ export default function Landing({ agents, loading }: { agents: Agent[]; loading?
           <div className="inline-block mb-4 px-4 py-2 border border-[#FFB800] bg-[#FFB800]/10 backdrop-blur-sm">
             <p className="text-[#FFB800] text-sm tracking-widest">⚠ SYNTHETIC WORKFORCE DEPLOYMENT SYSTEM</p>
           </div>
-          <h2 className="text-6xl font-bold mb-6 tracking-tight">
+          <h2 className="text-4xl md:text-6xl font-bold mb-6 tracking-tight">
             HIRE <span className="text-[#FFB800]">AI STAFF</span>.<br />
             PAY MONTHLY.
             <br />
@@ -182,7 +182,7 @@ export default function Landing({ agents, loading }: { agents: Agent[]; loading?
         </motion.div>
 
         {/* Stats */}
-        <div className="grid grid-cols-4 gap-6 max-w-4xl mx-auto mb-16">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-6 max-w-4xl mx-auto mb-16">
           {[
             { label: "ACTIVE AGENTS", value: "42" },
             { label: "DEPARTMENTS", value: "06" },
@@ -210,7 +210,7 @@ export default function Landing({ agents, loading }: { agents: Agent[]; loading?
           <p className="text-[#00F0FF]/60">Select a division to view available assets</p>
         </div>
 
-        <div className="grid grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {departments.map((dept) => (
             <button
               key={dept.id}
@@ -245,7 +245,7 @@ export default function Landing({ agents, loading }: { agents: Agent[]; loading?
           <p className="text-[#00F0FF]/60">High-demand agents ready for immediate deployment</p>
         </div>
 
-        <div className="grid grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {loading ? (
             [1, 2, 3].map((i) => (
               <div
@@ -335,7 +335,7 @@ export default function Landing({ agents, loading }: { agents: Agent[]; loading?
           <p className="text-[#00F0FF]/60">Additional assets are listed but not yet cleared for deployment.</p>
         </div>
 
-        <div className="grid grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {comingSoonAgents.map((agent) => (
             <div
               key={agent.code}
