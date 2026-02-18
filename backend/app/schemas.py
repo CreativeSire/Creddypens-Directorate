@@ -7,16 +7,19 @@ class AgentOut(BaseModel):
     agent_id: str
     code: str
     role: str = Field(description="Role title shown on dossier")
+    human_name: str | None = None
+    tagline: str | None = None
     description: str
+    capabilities: list[str] = Field(default_factory=list)
+    ideal_for: str | None = None
+    personality: str | None = None
+    communication_style: str | None = None
     department: str
     price_cents: int
     status: str
-    llm_route: str | None = Field(default=None, description="Routing label (e.g. claude_sonnet)")
-    llm_provider: str | None = Field(default=None, description="Resolved provider name (e.g. anthropic)")
-    llm_model: str | None = Field(default=None, description="Resolved model identifier, if configured")
-    llm_profile: dict = Field(default_factory=dict, description="LLM routing profile (e.g. default provider)")
     operational_rating: float | None = Field(default=None, description="0-10 public aggregate rating")
 
 
 class AgentDetailOut(AgentOut):
-    system_prompt: str = ""
+    profile: str = ""
+    operational_sections: list[dict] = Field(default_factory=list)

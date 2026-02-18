@@ -12,6 +12,15 @@ def ensure_schema(engine: Engine) -> None:
     """
     ddl = """
     create extension if not exists "pgcrypto";
+    alter table if exists agent_catalog add column if not exists human_name text;
+    alter table if exists agent_catalog add column if not exists tagline text;
+    alter table if exists agent_catalog add column if not exists profile text not null default '';
+    alter table if exists agent_catalog add column if not exists capabilities jsonb not null default '[]'::jsonb;
+    alter table if exists agent_catalog add column if not exists operational_sections jsonb not null default '[]'::jsonb;
+    alter table if exists agent_catalog add column if not exists ideal_for text;
+    alter table if exists agent_catalog add column if not exists personality text;
+    alter table if exists agent_catalog add column if not exists communication_style text;
+
     create table if not exists interaction_logs (
       interaction_id uuid primary key default gen_random_uuid(),
       org_id text not null references organizations(org_id) on delete cascade,

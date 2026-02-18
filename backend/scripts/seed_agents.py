@@ -5,23 +5,48 @@ import sys
 import uuid
 from pathlib import Path
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from app.db import engine
 
 
-SEED = [
-    {
-        "agent_id": "author-01",
-        "code": "Author-01",
-        "name": "Content Writer",
-        "description": "Writes blog posts, social captions, newsletters, and landing-page copy in your brand voice.",
-        "department": "Marketing & Creative",
-        "price_cents": 24900,
-        "status": "active",
-        "llm_profile": {"default": "claude_sonnet"},
+DATA_PATH = Path(__file__).resolve().parents[1] / "data" / "agent_dossiers.json"
+
+DEPARTMENT_MAP = {
+    "CUSTOMER EXPERIENCE": "Customer Experience",
+    "SALES & BUSINESS DEVELOPMENT": "Sales & Business Development",
+    "MARKETING & CREATIVE": "Marketing & Creative",
+    "OPERATIONS & ADMIN": "Operations & Admin",
+    "TECHNICAL & IT": "Technical & IT",
+    "SPECIALIZED SERVICES": "Specialized Services",
+}
+
+LEGACY_CODE_MAP = {
+    "AUTHOR-01": "Author-01",
+    "ASSISTANT-01": "Assistant-01",
+    "ASSIST-01": "Assistant-01",
+    "GREETER-01": "Greeter-01",
+}
+
+
+def canonical_code(code: str) -> str:
+    raw = (code or "").strip()
+    if not raw:
+        return raw
+    upper = raw.upper()
+    if upper in LEGACY_CODE_MAP:
+        return LEGACY_CODE_MAP[upper]
+    if "-" not in raw:
+        return upper
+    prefix, suffix = raw.rsplit("-", 1)
+    return f"{prefix.upper()}-{suffix}"
+
+
+ACTIVE_ROUTES = {
+    "Author-01": {
+        "llm_profile": {"default": "claude_opus"},
         "llm_provider": "anthropic",
         "llm_model": "claude-opus-4-5-20251101",
         "system_prompt": (
@@ -33,15 +58,8 @@ SEED = [
             "do not have sufficient information about, you ask one clarifying question before proceeding."
         ),
     },
-    {
-        "agent_id": "assistant-01",
-        "code": "Assistant-01",
-        "name": "Virtual Assistant",
-        "description": "Handles admin tasks, drafting, research, checklists, and day-to-day operational support.",
-        "department": "Operations & Admin",
-        "price_cents": 14900,
-        "status": "active",
-        "llm_profile": {"default": "grok_fast"},
+    "Assistant-01": {
+        "llm_profile": {"default": "claude_sonnet"},
         "llm_provider": "anthropic",
         "llm_model": "claude-sonnet-4-5-20250929",
         "system_prompt": (
@@ -53,14 +71,7 @@ SEED = [
             "do instead."
         ),
     },
-    {
-        "agent_id": "greeter-01",
-        "code": "Greeter-01",
-        "name": "AI Receptionist",
-        "description": "Text-based customer intake for your site and dashboard: FAQs, triage, and escalation routing.",
-        "department": "Customer Experience",
-        "price_cents": 14900,
-        "status": "active",
+    "Greeter-01": {
         "llm_profile": {"default": "claude_sonnet"},
         "llm_provider": "anthropic",
         "llm_model": "claude-sonnet-4-5-20250929",
@@ -74,47 +85,92 @@ SEED = [
             "has explicitly provided that information in your configuration."
         ),
     },
-]
+}
 
-DEPARTMENTS = [
-    "Customer Experience",
-    "Sales & Business Dev",
-    "Marketing & Creative",
-    "Operations & Admin",
-    "Technical & IT",
-    "Specialized Services",
-]
 
-COMING_SOON_PLACEHOLDERS = [
-    {
-        "agent_id": f"coming-{i:02d}",
-        "code": f"Clearance-{i:02d}",
-        "name": "Clearance Pending",
-        "description": "This asset is not yet cleared for deployment.",
-        "department": DEPARTMENTS[(i - 1) % len(DEPARTMENTS)],
-        "price_cents": 0,
-        "status": "coming_soon",
-        "llm_profile": {"default": "tbd"},
-        "llm_provider": None,
-        "llm_model": None,
-        "system_prompt": "",
+def load_dossiers() -> list[dict]:
+    if not DATA_PATH.exists():
+        raise FileNotFoundError(f"Dossier data file not found: {DATA_PATH}")
+    data = json.loads(DATA_PATH.read_text(encoding="utf-8"))
+    if not isinstance(data, list) or not data:
+        raise ValueError("Dossier data is empty or invalid")
+    return data
+
+
+def to_seed_row(item: dict) -> dict:
+    code = canonical_code(str(item.get("code", "")).strip())
+    route = ACTIVE_ROUTES.get(code)
+    return {
+        "agent_id": code.lower(),
+        "code": code,
+        "name": str(item.get("role", "")).strip() or code,
+        "human_name": str(item.get("human_name", "")).strip() or None,
+        "tagline": str(item.get("tagline", "")).strip() or None,
+        "description": str(item.get("description", "")).strip() or "",
+        "profile": str(item.get("profile", "")).strip() or "",
+        "capabilities": item.get("capabilities") or [],
+        "operational_sections": item.get("operational_sections") or [],
+        "ideal_for": str(item.get("ideal_for", "")).strip() or None,
+        "personality": str(item.get("personality", "")).strip() or None,
+        "communication_style": str(item.get("communication_style", "")).strip() or None,
+        "department": DEPARTMENT_MAP.get(str(item.get("department", "")).strip(), str(item.get("department", "")).strip()),
+        "price_cents": int(item.get("price_cents") or 0),
+        "status": "active" if code in {"Author-01", "Assistant-01", "Greeter-01"} else "coming_soon",
+        "llm_profile": route["llm_profile"] if route else {"default": "tbd"},
+        "llm_provider": route["llm_provider"] if route else None,
+        "llm_model": route["llm_model"] if route else None,
+        "system_prompt": route["system_prompt"] if route else "",
     }
-    for i in range(1, 40)
-]
 
 
 def main() -> None:
+    dossiers = load_dossiers()
+    rows = [to_seed_row(item) for item in dossiers]
+    expected_agent_ids = [row["agent_id"] for row in rows]
+
+    ensure_columns_sql = text(
+        """
+        alter table if exists agent_catalog add column if not exists human_name text;
+        alter table if exists agent_catalog add column if not exists tagline text;
+        alter table if exists agent_catalog add column if not exists profile text not null default '';
+        alter table if exists agent_catalog add column if not exists capabilities jsonb not null default '[]'::jsonb;
+        alter table if exists agent_catalog add column if not exists operational_sections jsonb not null default '[]'::jsonb;
+        alter table if exists agent_catalog add column if not exists ideal_for text;
+        alter table if exists agent_catalog add column if not exists personality text;
+        alter table if exists agent_catalog add column if not exists communication_style text;
+        """
+    )
+    delete_stale_agents_sql = text("delete from agent_catalog where agent_id not in :agent_ids").bindparams(
+        bindparam("agent_ids", expanding=True)
+    )
+
     upsert_agent_sql = text(
         """
         insert into agent_catalog
-          (agent_id, code, name, description, department, price_cents, status, llm_profile, llm_provider, llm_model, system_prompt)
+          (
+            agent_id, code, name, human_name, tagline, description, profile, capabilities, operational_sections,
+            ideal_for, personality, communication_style, department, price_cents, status,
+            llm_profile, llm_provider, llm_model, system_prompt
+          )
         values
-          (:agent_id, :code, :name, :description, :department, :price_cents, :status,
-           cast(:llm_profile as jsonb), :llm_provider, :llm_model, :system_prompt)
+          (
+            :agent_id, :code, :name, :human_name, :tagline, :description, :profile,
+            cast(:capabilities as jsonb), cast(:operational_sections as jsonb),
+            :ideal_for, :personality, :communication_style, :department, :price_cents, :status,
+            cast(:llm_profile as jsonb), :llm_provider, :llm_model, :system_prompt
+          )
         on conflict (agent_id) do update set
           code = excluded.code,
           name = excluded.name,
+          human_name = excluded.human_name,
+          tagline = excluded.tagline,
           description = excluded.description,
+          profile = excluded.profile,
+          capabilities = excluded.capabilities,
+          operational_sections = excluded.operational_sections,
+          ideal_for = excluded.ideal_for,
+          personality = excluded.personality,
+          communication_style = excluded.communication_style,
           department = excluded.department,
           price_cents = excluded.price_cents,
           status = excluded.status,
@@ -157,14 +213,18 @@ def main() -> None:
     )
 
     with engine.begin() as conn:
-        for row in [*SEED, *COMING_SOON_PLACEHOLDERS]:
+        conn.execute(ensure_columns_sql)
+        conn.execute(delete_stale_agents_sql, {"agent_ids": expected_agent_ids})
+        for row in rows:
             payload = {
                 **row,
-                "llm_profile": json.dumps(row.get("llm_profile") or {}),
+                "capabilities": json.dumps(row["capabilities"]),
+                "operational_sections": json.dumps(row["operational_sections"]),
+                "llm_profile": json.dumps(row["llm_profile"]),
             }
             conn.execute(upsert_agent_sql, payload)
 
-        # Dev org + hires (mocked validation structure for v1)
+        # Dev org + hires (v1 launch trio)
         conn.execute(upsert_org_sql, {"org_id": "org_test", "name": "Test Organization"})
         conn.execute(upsert_user_sql, {"user_id": "user_test", "org_id": "org_test", "email": "test@example.com"})
         for code in ["Author-01", "Assistant-01", "Greeter-01"]:
@@ -184,6 +244,8 @@ def main() -> None:
                     ),
                 },
             )
+
+    print(f"Seeded {len(rows)} agents from {DATA_PATH.name}")
 
 
 if __name__ == "__main__":

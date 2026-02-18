@@ -8,7 +8,6 @@ type HiredAgentCardProps = {
     name: string;
     role: string;
     department: string;
-    llm_model: string | null;
   };
   stats: {
     tasks_today: number;
@@ -43,7 +42,6 @@ export function HiredAgentCard({ agent, stats, status, onOpenChat }: HiredAgentC
         </div>
         <div className="text-xs text-[#00F0FF]/40 mt-2">
           {agent.department}
-          {agent.llm_model ? ` • ${agent.llm_model}` : ""}
         </div>
       </div>
 
@@ -74,7 +72,7 @@ export function HiredAgentCard({ agent, stats, status, onOpenChat }: HiredAgentC
           OPEN CHAT
         </button>
         <button
-          onClick={() => router.push(`/agents/${encodeURIComponent(agent.agent_code)}`)}
+          onClick={() => router.push(`/dashboard/agents/${encodeURIComponent(agent.agent_code)}`)}
           className="px-4 py-2 border border-[#00F0FF]/30 text-[#00F0FF] text-xs tracking-[0.25em] hover:bg-[#00F0FF]/10 transition-all"
         >
           DETAILS
@@ -83,4 +81,3 @@ export function HiredAgentCard({ agent, stats, status, onOpenChat }: HiredAgentC
     </div>
   );
 }
-

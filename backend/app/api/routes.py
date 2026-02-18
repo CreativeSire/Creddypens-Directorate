@@ -28,12 +28,12 @@ def list_agents(department: str | None = None, db: Session = Depends(get_db)) ->
     stmt = select(AgentCatalog)
     if department:
         dept_map: dict[str, list[str]] = {
-            "customer-experience": ["Customer Experience"],
-            "sales-business-dev": ["Sales & Business Dev", "Sales & Business Development", "Sales"],
-            "marketing-creative": ["Marketing & Creative", "Marketing"],
-            "operations-admin": ["Operations & Admin", "Operations"],
-            "technical-it": ["Technical & IT", "Technical", "IT"],
-            "specialized-services": ["Specialized Services", "Directorate"],
+            "customer-experience": ["Customer Experience", "CUSTOMER EXPERIENCE"],
+            "sales-business-dev": ["Sales & Business Dev", "Sales & Business Development", "SALES & BUSINESS DEVELOPMENT", "Sales"],
+            "marketing-creative": ["Marketing & Creative", "MARKETING & CREATIVE", "Marketing"],
+            "operations-admin": ["Operations & Admin", "OPERATIONS & ADMIN", "Operations"],
+            "technical-it": ["Technical & IT", "TECHNICAL & IT", "Technical", "IT"],
+            "specialized-services": ["Specialized Services", "SPECIALIZED SERVICES", "Directorate"],
         }
         names = dept_map.get(department, [department])
         stmt = stmt.where(AgentCatalog.department.in_(names))
@@ -42,21 +42,21 @@ def list_agents(department: str | None = None, db: Session = Depends(get_db)) ->
     agents = result.scalars().all()
     out: list[AgentOut] = []
     for agent in agents:
-        llm_profile = agent.llm_profile or {}
-        route = llm_profile.get("default")
         out.append(
             AgentOut(
                 agent_id=agent.agent_id,
                 code=agent.code,
                 role=agent.name,
+                human_name=agent.human_name,
+                tagline=agent.tagline,
                 description=agent.description,
+                capabilities=list(agent.capabilities or []),
+                ideal_for=agent.ideal_for,
+                personality=agent.personality,
+                communication_style=agent.communication_style,
                 department=agent.department,
                 price_cents=agent.price_cents,
                 status=agent.status,
-                llm_route=route,
-                llm_provider=agent.llm_provider,
-                llm_model=agent.llm_model,
-                llm_profile=llm_profile,
                 operational_rating=None,
             )
         )
@@ -146,22 +146,23 @@ def get_agent(agent_code: str, db: Session = Depends(get_db)) -> AgentDetailOut:
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    llm_profile = agent.llm_profile or {}
-    route = llm_profile.get("default")
     return AgentDetailOut(
         agent_id=agent.agent_id,
         code=agent.code,
         role=agent.name,
+        human_name=agent.human_name,
+        tagline=agent.tagline,
         description=agent.description,
+        capabilities=list(agent.capabilities or []),
+        ideal_for=agent.ideal_for,
+        personality=agent.personality,
+        communication_style=agent.communication_style,
+        profile=agent.profile or "",
+        operational_sections=list(agent.operational_sections or []),
         department=agent.department,
         price_cents=agent.price_cents,
         status=agent.status,
-        llm_route=route,
-        llm_provider=agent.llm_provider,
-        llm_model=agent.llm_model,
-        llm_profile=llm_profile,
         operational_rating=None,
-        system_prompt=agent.system_prompt or "",
     )
 
 
@@ -178,9 +179,6 @@ def chat_with_agent(code: str, payload: ChatIn, db: Session = Depends(get_db)) -
         from fastapi import HTTPException
 
         raise HTTPException(status_code=409, detail="Agent is not active")
-
-    llm_profile = agent.llm_profile or {}
-    route = llm_profile.get("default")
 
     system = system_prompt_for_agent(code)
     try:
@@ -199,12 +197,7 @@ def chat_with_agent(code: str, payload: ChatIn, db: Session = Depends(get_db)) -
 
         raise HTTPException(status_code=503, detail=str(e)) from e
 
-    return ChatOut(
-        reply=result.get("response") or "",
-        llm_provider=agent.llm_provider,
-        llm_route=route,
-        llm_model=agent.llm_model,
-    )
+    return ChatOut(reply=result.get("response") or result.get("content") or result.get("text") or "")
 
 
 @router.post("/v1/agents/{agent_code}/hire")
@@ -347,11 +340,9 @@ def list_org_agents(org_id: str, include_stats: bool = False, db: Session = Depe
               ha.status,
               ha.created_at,
               ac.code as agent_code,
-              ac.name as agent_name,
+              coalesce(ac.human_name, ac.name) as agent_name,
               ac.name as agent_role,
               ac.department,
-              ac.llm_provider,
-              ac.llm_model,
               coalesce(s.tasks_today, 0)::int as tasks_today,
               coalesce(s.avg_latency_ms, 0)::float as avg_latency_ms
             from hired_agents ha
@@ -385,8 +376,6 @@ def list_org_agents(org_id: str, include_stats: bool = False, db: Session = Depe
                     "name": r["agent_name"],
                     "role": r["agent_role"],
                     "department": r["department"],
-                    "llm_provider": r["llm_provider"],
-                    "llm_model": r["llm_model"],
                 },
                 "stats": {
                     "tasks_today": int(r["tasks_today"] or 0),
@@ -580,6 +569,8 @@ def execute_agent(
     except LLMError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
 
+    response_text = result.get("response") or result.get("content") or result.get("text") or ""
+
     # Best-effort interaction log for dashboard stats / activity feed.
     try:
         db.execute(
@@ -596,7 +587,7 @@ def execute_agent(
                 "agent_code": agent_code,
                 "session_id": payload.session_id or "",
                 "message": payload.message,
-                "response": result.get("response") or "",
+                "response": response_text,
                 "model_used": result.get("model_used") or "",
                 "latency_ms": int(result.get("latency_ms") or 0),
                 "trace_id": result.get("trace_id") or trace_id,
@@ -608,7 +599,7 @@ def execute_agent(
 
     return ExecuteOut(
         agent_code=agent_code,
-        response=result.get("response") or "",
+        response=response_text,
         model_used=result["model_used"],
         latency_ms=int(result["latency_ms"]),
         trace_id=result["trace_id"],

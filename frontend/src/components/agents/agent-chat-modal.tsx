@@ -24,7 +24,7 @@ type AgentChatModalProps = {
   onAfterMessage?: () => void;
 };
 
-type AgentDetailLite = Pick<AgentDetail, "code" | "role" | "department" | "llm_model">;
+type AgentDetailLite = Pick<AgentDetail, "code" | "role" | "department">;
 
 function newSessionId() {
   try {
@@ -63,7 +63,6 @@ export function AgentChatModal({ agentCode, orgId, onClose, onAfterMessage }: Ag
         code: data.code,
         role: data.role,
         department: data.department,
-        llm_model: data.llm_model,
       };
       setAgent(detail);
       setMessages([
@@ -76,7 +75,7 @@ export function AgentChatModal({ agentCode, orgId, onClose, onAfterMessage }: Ag
       setTimeout(() => textareaRef.current?.focus(), 50);
     };
     fetchAgent().catch(() => {
-      setAgent({ code: agentCode, role: "Agent", department: "Directorate", llm_model: null });
+      setAgent({ code: agentCode, role: "Agent", department: "Directorate" });
       setMessages([
         {
           role: "agent",
@@ -164,7 +163,6 @@ export function AgentChatModal({ agentCode, orgId, onClose, onAfterMessage }: Ag
           </div>
           <div className="text-xs text-[#00F0FF]/50 mt-0.5">
             {agent.department}
-            {agent.llm_model ? ` • ${agent.llm_model}` : ""}
           </div>
         </div>
 
@@ -192,13 +190,7 @@ export function AgentChatModal({ agentCode, orgId, onClose, onAfterMessage }: Ag
               </div>
 
               <div className="mt-2 text-xs text-[#00F0FF]/40 font-mono">
-                {msg.metadata?.model_used ? (
-                  <>
-                    {msg.metadata.model_used} • {msg.metadata.latency_ms ?? 0}ms
-                  </>
-                ) : (
-                  new Date(msg.timestamp).toLocaleTimeString()
-                )}
+                {msg.metadata ? `Response Time • ${msg.metadata.latency_ms ?? 0}ms` : new Date(msg.timestamp).toLocaleTimeString()}
               </div>
             </div>
           </div>

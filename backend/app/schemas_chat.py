@@ -9,7 +9,3 @@ class ChatIn(BaseModel):
 
 class ChatOut(BaseModel):
     reply: str
-    llm_provider: str | None = None
-    llm_route: str | None = None
-    llm_model: str | None = None
-

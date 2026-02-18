@@ -22,56 +22,37 @@ if (-not $env:DATABASE_URL) {
 
 python .\scripts\seed_agents.py
 
-$port = if ($env:PORT) { [int]$env:PORT } else { 8010 }
-$baseUrl = "http://127.0.0.1:$port"
+@'
+from fastapi.testclient import TestClient
+from app.main import app
 
-$proc = Start-Process -FilePath python -ArgumentList @("-m", "uvicorn", "app.main:app", "--port", "$port") -PassThru -WindowStyle Hidden
-try {
-  $deadline = (Get-Date).AddSeconds(30)
-  do {
-    try {
-      $health = Invoke-WebRequest -Uri "$baseUrl/health" -TimeoutSec 2
-      if ($health.StatusCode -eq 200) { break }
-    } catch {
-      Start-Sleep -Milliseconds 400
-    }
-  } while ((Get-Date) -lt $deadline)
+client = TestClient(app)
 
-  if (-not $health -or $health.StatusCode -ne 200) {
-    throw "GET /health did not return 200"
-  }
+health = client.get("/health")
+if health.status_code != 200:
+    raise SystemExit("GET /health did not return 200")
 
-  $agentsResp = Invoke-WebRequest -Uri "$baseUrl/v1/agents" -TimeoutSec 10
-  if ($agentsResp.StatusCode -ne 200) {
-    throw "GET /v1/agents did not return 200"
-  }
+agents_resp = client.get("/v1/agents")
+if agents_resp.status_code != 200:
+    raise SystemExit("GET /v1/agents did not return 200")
 
-  $agents = $agentsResp.Content | ConvertFrom-Json
-  $need = @("Author-01", "Assistant-01", "Greeter-01")
+agents = agents_resp.json()
+required_codes = {"Author-01", "Assistant-01", "Greeter-01"}
 
-  foreach ($code in $need) {
-    if ((@($agents.code) -notcontains $code)) {
-      throw "Missing expected agent code: $code"
-    }
-    $a = $agents | Where-Object code -eq $code | Select-Object -First 1
-    foreach ($f in @("code", "role", "department", "price_cents", "status", "llm_profile", "llm_provider", "llm_route")) {
-      if (-not ($a.PSObject.Properties.Name -contains $f)) {
-        throw "$code missing field: $f"
-      }
-    }
-  }
+for code in required_codes:
+    found = next((agent for agent in agents if agent.get("code") == code), None)
+    if not found:
+        raise SystemExit(f"Missing expected agent code: {code}")
+    for field in ("code", "role", "human_name", "tagline", "department", "price_cents", "status", "capabilities", "ideal_for"):
+        if field not in found:
+            raise SystemExit(f"{code} missing field: {field}")
 
-  $comingSoonCount = @($agents | Where-Object status -eq "coming_soon").Count
-  if ($comingSoonCount -lt 1) {
-    throw "No coming_soon agents returned (expected at least 1)"
-  }
+coming_soon_count = sum(1 for agent in agents if agent.get("status") == "coming_soon")
+if coming_soon_count < 1:
+    raise SystemExit("No coming_soon agents returned (expected at least 1)")
 
-  Write-Output "PASS: /health 200"
-  Write-Output "PASS: /v1/agents 200"
-  Write-Output "PASS: seeded agents present: $($need -join ', ')"
-  Write-Output "PASS: coming_soon agents returned: $comingSoonCount"
-} finally {
-  if ($proc -and -not $proc.HasExited) {
-    Stop-Process -Id $proc.Id -Force
-  }
-}
+print("PASS: /health 200")
+print("PASS: /v1/agents 200")
+print("PASS: seeded agents present: Author-01, Assistant-01, Greeter-01")
+print(f"PASS: coming_soon agents returned: {coming_soon_count}")
+'@ | python -

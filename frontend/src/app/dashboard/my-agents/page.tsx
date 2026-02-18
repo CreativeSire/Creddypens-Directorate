@@ -14,8 +14,6 @@ type HiredAgent = {
     name: string;
     role: string;
     department: string;
-    llm_provider: string | null;
-    llm_model: string | null;
   };
   stats: {
     tasks_today: number;

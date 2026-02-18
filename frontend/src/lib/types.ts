@@ -2,18 +2,21 @@ export type Agent = {
   agent_id: string;
   code: string;
   role: string;
+  human_name?: string | null;
+  tagline?: string | null;
   description: string;
+  capabilities?: string[];
+  ideal_for?: string | null;
+  personality?: string | null;
+  communication_style?: string | null;
   department: string;
   price_cents: number;
   status: string;
-  llm_provider?: string | null;
-  llm_model?: string | null;
-  llm_route?: string | null;
 };
 
 export type AgentDetail = Agent & {
-  llm_profile: Record<string, unknown>;
-  system_prompt: string;
+  profile: string;
+  operational_sections: Array<{ title: string; items: string[] }>;
 };
 
 export type ExecuteRequest = {
@@ -34,4 +37,3 @@ export type ExecuteResponse = {
   trace_id: string;
   session_id: string;
 };
-

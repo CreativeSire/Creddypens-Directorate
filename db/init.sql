@@ -8,7 +8,15 @@ create table if not exists agent_catalog (
   agent_id text primary key,
   code text not null unique,
   name text not null,
+  human_name text,
+  tagline text,
   description text not null,
+  profile text not null default '',
+  capabilities jsonb not null default '[]'::jsonb,
+  operational_sections jsonb not null default '[]'::jsonb,
+  ideal_for text,
+  personality text,
+  communication_style text,
   department text not null,
   price_cents integer not null,
   status text not null default 'coming_soon',
@@ -26,6 +34,14 @@ create index if not exists idx_agent_catalog_status on agent_catalog(status);
 alter table agent_catalog add column if not exists llm_provider text;
 alter table agent_catalog add column if not exists llm_model text;
 alter table agent_catalog add column if not exists system_prompt text not null default '';
+alter table agent_catalog add column if not exists human_name text;
+alter table agent_catalog add column if not exists tagline text;
+alter table agent_catalog add column if not exists profile text not null default '';
+alter table agent_catalog add column if not exists capabilities jsonb not null default '[]'::jsonb;
+alter table agent_catalog add column if not exists operational_sections jsonb not null default '[]'::jsonb;
+alter table agent_catalog add column if not exists ideal_for text;
+alter table agent_catalog add column if not exists personality text;
+alter table agent_catalog add column if not exists communication_style text;
 
 create table if not exists organizations (
   org_id text primary key,

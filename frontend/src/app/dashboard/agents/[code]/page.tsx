@@ -1,14 +1,9 @@
-import type { Metadata } from "next";
 import Link from "next/link";
 import { CheckCircle2, ChevronRight } from "lucide-react";
 
 import { fetchAgent } from "@/lib/api";
 import { DemoChat } from "@/components/demo-chat";
 import { HireButton } from "@/components/hire-button";
-
-export async function generateMetadata({ params }: { params: { code: string } }): Promise<Metadata> {
-  return { title: `${decodeURIComponent(params.code)} | CreddyPens` };
-}
 
 const formatPrice = (cents: number) => `$${Math.floor(cents / 100)}/month`;
 
@@ -20,21 +15,35 @@ function splitCsv(text: string | null | undefined): string[] {
     .filter(Boolean);
 }
 
-export default async function AgentPage({ params }: { params: { code: string } }) {
+function departmentToSlug(department: string): string {
+  const map: Record<string, string> = {
+    "Customer Experience": "customer-experience",
+    "Sales & Business Development": "sales-business-dev",
+    "Sales & Business Dev": "sales-business-dev",
+    "Marketing & Creative": "marketing-creative",
+    "Operations & Admin": "operations-admin",
+    "Technical & IT": "technical-it",
+    "Specialized Services": "specialized-services",
+  };
+  return map[department] || department.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+}
+
+export default async function DashboardAgentPage({ params }: { params: { code: string } }) {
   const code = decodeURIComponent(params.code);
   const agent = await fetchAgent(code);
   const displayName = agent.human_name || agent.role;
   const idealFor = splitCsv(agent.ideal_for);
-  const capabilities = (agent.capabilities || []).slice(0, 8);
 
   return (
     <div className="min-h-screen bg-[#0A0F14] text-white">
       <div className="max-w-6xl mx-auto px-6 py-4 text-xs text-[#00F0FF]/60 flex items-center gap-2">
-        <Link href="/" className="hover:text-[#00F0FF]">
-          Home
+        <Link href="/dashboard" className="hover:text-[#00F0FF]">
+          Dashboard
         </Link>
         <ChevronRight className="w-3.5 h-3.5" />
-        <span className="text-[#00F0FF]/80">{agent.department}</span>
+        <Link href={`/dashboard/departments/${departmentToSlug(agent.department)}`} className="hover:text-[#00F0FF]">
+          {agent.department}
+        </Link>
         <ChevronRight className="w-3.5 h-3.5" />
         <span className="text-white">{agent.code}</span>
       </div>
@@ -59,7 +68,7 @@ export default async function AgentPage({ params }: { params: { code: string } }
       <div className="max-w-6xl mx-auto px-6 py-12">
         <h2 className="text-xs text-[#00F0FF] tracking-[0.25em] mb-6">{"// CORE CAPABILITIES"}</h2>
         <div className="grid md:grid-cols-2 gap-6">
-          {capabilities.map((capability, index) => (
+          {(agent.capabilities || []).slice(0, 8).map((capability, index) => (
             <div key={`${capability}-${index}`} className="border border-[#00F0FF]/30 bg-[#00F0FF]/5 backdrop-blur-sm p-6">
               <div className="flex items-start gap-4">
                 <CheckCircle2 className="w-5 h-5 text-[#00F0FF] mt-0.5 flex-shrink-0" />
@@ -147,4 +156,3 @@ export default async function AgentPage({ params }: { params: { code: string } }
     </div>
   );
 }
-

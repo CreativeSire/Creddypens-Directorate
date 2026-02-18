@@ -11,6 +11,24 @@ class LLMError(RuntimeError):
     pass
 
 
+def _coerce_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list):
+        parts: list[str] = []
+        for item in value:
+            text = _coerce_text(item)
+            if text:
+                parts.append(text)
+        return "\n".join(parts).strip()
+    if isinstance(value, dict):
+        for key in ("text", "content", "value"):
+            text = _coerce_text(value.get(key))
+            if text:
+                return text
+    return ""
+
+
 def to_litellm_model(provider: str, model: str) -> str:
     provider = (provider or "").strip()
     model = (model or "").strip()
@@ -91,10 +109,13 @@ def execute_via_litellm(
     try:
         choice0 = (data.get("choices") or [None])[0] or {}
         msg = choice0.get("message") or {}
-        text = msg.get("content") or ""
+        text = _coerce_text(msg.get("content"))
         if not text:
             # Some providers return `text` directly on choice.
-            text = choice0.get("text") or ""
+            text = _coerce_text(choice0.get("text"))
+        if not text:
+            # Responses API style fallback
+            text = _coerce_text(data.get("output_text"))
     except Exception:
         text = ""
 
