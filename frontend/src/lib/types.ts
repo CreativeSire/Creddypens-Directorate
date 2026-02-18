@@ -35,6 +35,7 @@ export type ExecuteResponse = {
   model_used: string;
   latency_ms: number;
   tokens_used?: number;
+  interaction_id?: string | null;
   trace_id: string;
   session_id: string;
 };

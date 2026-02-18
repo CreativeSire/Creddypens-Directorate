@@ -7,11 +7,13 @@ import { X, Send } from "lucide-react";
 import { apiBaseUrl } from "@/lib/env";
 import type { AgentDetail, ExecuteResponse } from "@/lib/types";
 import { ChatSkeleton } from "@/components/skeletons/chat-skeleton";
+import { MessageFeedback } from "@/components/agents/message-feedback";
 
 type Message = {
   role: "user" | "agent";
   content: string;
   timestamp: string;
+  interactionId?: string;
   metadata?: {
     model_used?: string;
     latency_ms?: number;
@@ -126,6 +128,7 @@ export function AgentChatModal({ agentCode, orgId, onClose, onAfterMessage }: Ag
         role: "agent",
         content: data.response || "",
         timestamp: new Date().toISOString(),
+        interactionId: (data.interaction_id || undefined) as string | undefined,
         metadata: { model_used: data.model_used, latency_ms: data.latency_ms },
       };
       if (typeof data.tokens_used === "number") {
@@ -203,6 +206,8 @@ export function AgentChatModal({ agentCode, orgId, onClose, onAfterMessage }: Ag
                     }`
                   : new Date(msg.timestamp).toLocaleTimeString()}
               </div>
+
+              {msg.role === "agent" && msg.interactionId ? <MessageFeedback interactionId={msg.interactionId} /> : null}
             </div>
           </div>
         ))}

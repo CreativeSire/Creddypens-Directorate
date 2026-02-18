@@ -21,5 +21,6 @@ class ExecuteOut(BaseModel):
     model_used: str
     latency_ms: int
     tokens_used: int = 0
+    interaction_id: str | None = None
     trace_id: str
     session_id: str

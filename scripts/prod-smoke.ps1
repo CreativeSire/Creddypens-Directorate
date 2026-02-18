@@ -60,7 +60,8 @@ try {
 
   Step "3) Optional frontend basic availability"
   if ($FrontendUrl) {
-    $homeResp = Invoke-WebRequest -Method Get -Uri $FrontendUrl -TimeoutSec 60
+    # UseBasicParsing avoids legacy IE/COM dependencies that can throw null-reference errors on Windows.
+    $homeResp = Invoke-WebRequest -UseBasicParsing -Method Get -Uri $FrontendUrl -TimeoutSec 60
     if ($homeResp.StatusCode -eq 200) {
       Pass "frontend home status=200"
       Add-Result "frontend-home" $true "status=200"

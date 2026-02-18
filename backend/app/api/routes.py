@@ -748,30 +748,39 @@ def execute_agent(
     response_text = result.get("response") or result.get("content") or result.get("text") or ""
     tokens_used = int(result.get("tokens_used") or 0)
 
+    interaction_id: str | None = None
+
     # Best-effort interaction log for dashboard stats / activity feed.
     try:
-        db.execute(
+        params = {
+            "org_id": org_id,
+            "agent_code": agent_code,
+            "session_id": payload.session_id or "",
+            "message": payload.message,
+            "response": response_text,
+            "model_used": result.get("model_used") or "",
+            "latency_ms": int(result.get("latency_ms") or 0),
+            "tokens_used": tokens_used,
+            "quality_score": quality_score,
+            "trace_id": result.get("trace_id") or trace_id,
+        }
+
+        # Prefer RETURNING when supported so the frontend can attach feedback.
+        row = db.execute(
             text(
                 """
                 insert into interaction_logs
                   (org_id, agent_code, session_id, message, response, model_used, latency_ms, tokens_used, quality_score, trace_id)
                 values
-                  (:org_id, :agent_code, :session_id, :message, :response, :model_used, :latency_ms, :tokens_used, :quality_score, :trace_id);
+                  (:org_id, :agent_code, :session_id, :message, :response, :model_used, :latency_ms, :tokens_used, :quality_score, :trace_id)
+                returning interaction_id;
                 """
             ),
-            {
-                "org_id": org_id,
-                "agent_code": agent_code,
-                "session_id": payload.session_id or "",
-                "message": payload.message,
-                "response": response_text,
-                "model_used": result.get("model_used") or "",
-                "latency_ms": int(result.get("latency_ms") or 0),
-                "tokens_used": tokens_used,
-                "quality_score": quality_score,
-                "trace_id": result.get("trace_id") or trace_id,
-            },
-        )
+            params,
+        ).mappings().first()
+
+        if row and row.get("interaction_id"):
+            interaction_id = str(row["interaction_id"])
         db.commit()
     except Exception:
         db.rollback()
@@ -782,6 +791,7 @@ def execute_agent(
         model_used=result["model_used"],
         latency_ms=int(result["latency_ms"]),
         tokens_used=tokens_used,
+        interaction_id=interaction_id,
         trace_id=result["trace_id"],
         session_id=payload.session_id,
     )
