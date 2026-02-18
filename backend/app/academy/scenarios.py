@@ -24,25 +24,25 @@ class ScenarioGenerator:
                 "type": "greeting",
                 "difficulty": "easy",
                 "template": "Hi there — are you open {time_of_day}? I'm looking for help with {topic}.",
-                "times": ["today", "this weekend", "after hours", "right now"],
-                "topics": ["booking", "pricing", "services", "support"],
+                "time_of_day": ["today", "this weekend", "after hours", "right now"],
+                "topic": ["booking", "pricing", "services", "support"],
                 "qualities": ["warm greeting", "clarifying question if needed", "no fabrication"],
             },
             {
                 "type": "appointment",
                 "difficulty": "medium",
                 "template": "Can you {action} an appointment for a {service} {timing}?",
-                "actions": ["schedule", "reschedule", "cancel"],
-                "services": ["consultation", "demo", "meeting", "service"],
-                "timings": ["tomorrow", "next week", "this afternoon", "in two hours"],
+                "action": ["schedule", "reschedule", "cancel"],
+                "service": ["consultation", "demo", "meeting", "service"],
+                "timing": ["tomorrow", "next week", "this afternoon", "in two hours"],
                 "qualities": ["collect name", "collect purpose", "route/escalate appropriately"],
             },
             {
                 "type": "complaint",
                 "difficulty": "hard",
                 "template": "I'm upset about {issue}. I need {resolution} now.",
-                "issues": ["a billing error", "a delayed response", "poor service", "a broken link"],
-                "resolutions": ["a call back", "a refund", "an escalation", "a fix"],
+                "issue": ["a billing error", "a delayed response", "poor service", "a broken link"],
+                "resolution": ["a call back", "a refund", "an escalation", "a fix"],
                 "qualities": ["de-escalation", "no pricing promises", "handoff to team"],
             },
         ],
@@ -143,4 +143,3 @@ class ScenarioGenerator:
                 )
             )
         return out
-
