@@ -11,6 +11,23 @@ class LLMError(RuntimeError):
     pass
 
 
+def _is_retryable_error(exc: Exception) -> bool:
+    name = exc.__class__.__name__.lower()
+    msg = str(exc).lower()
+    retry_markers = (
+        "timeout",
+        "timed out",
+        "temporarily unavailable",
+        "service unavailable",
+        "rate limit",
+        "connection reset",
+        "connection aborted",
+        "bad gateway",
+        "gateway timeout",
+    )
+    return ("timeout" in name) or any(marker in msg for marker in retry_markers)
+
+
 def _coerce_text(value: Any) -> str:
     if isinstance(value, str):
         return value.strip()
@@ -70,23 +87,36 @@ def execute_via_litellm(
         raise LLMError("litellm is not installed. Run: pip install -r requirements.txt") from e
 
     start = time.perf_counter()
-    try:
-        resp = completion(
-            model=model_used,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            metadata={"trace_id": trace_id},
-        )
-    except Exception as e:
-        msg = str(e).strip()
+    retries = max(0, int(settings.litellm_retries))
+    resp: Any = None
+    last_error: Exception | None = None
+    for attempt in range(retries + 1):
+        try:
+            resp = completion(
+                model=model_used,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                metadata={"trace_id": trace_id},
+                timeout=max(5, int(settings.litellm_timeout_s)),
+            )
+            last_error = None
+            break
+        except Exception as e:
+            last_error = e
+            if attempt >= retries or not _is_retryable_error(e):
+                break
+            time.sleep(min(1.5, 0.35 * (attempt + 1)))
+
+    if last_error is not None:
+        msg = str(last_error).strip()
         if msg:
             msg = msg.replace("\n", " ")
             if len(msg) > 240:
                 msg = msg[:240] + "..."
-            raise LLMError(f"LLM call failed: {e.__class__.__name__}: {msg}") from e
-        raise LLMError(f"LLM call failed: {e.__class__.__name__}") from e
+            raise LLMError(f"LLM call failed: {last_error.__class__.__name__}: {msg}") from last_error
+        raise LLMError(f"LLM call failed: {last_error.__class__.__name__}") from last_error
 
     latency_ms = int((time.perf_counter() - start) * 1000)
 
@@ -117,8 +147,14 @@ def execute_via_litellm(
         if not text:
             # Responses API style fallback
             text = _coerce_text(data.get("output_text"))
+        if not text:
+            # Some providers expose content in delta or chunks.
+            text = _coerce_text(choice0.get("delta"))
     except Exception:
         text = ""
+
+    if not text:
+        raise LLMError("LLM returned an empty response.")
 
     if getattr(settings, "litellm_debug", False):
         print("=" * 80)

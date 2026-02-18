@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 
 import { apiBaseUrl } from "@/lib/env";
 import { getOrgId } from "@/lib/org";
@@ -37,6 +38,19 @@ export default function MyAgentsPage() {
 
   useEffect(() => {
     setOrgIdState(getOrgId());
+  }, []);
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const checkout = url.searchParams.get("checkout");
+    if (!checkout) return;
+    if (checkout === "success") {
+      toast.success("Checkout complete. Agent deployment is now active.");
+    } else if (checkout === "cancelled") {
+      toast.message("Checkout canceled. No changes were applied.");
+    }
+    url.searchParams.delete("checkout");
+    window.history.replaceState({}, "", url.toString());
   }, []);
 
   const fetchHiredAgents = useCallback(async () => {

@@ -31,11 +31,17 @@ class Settings(BaseSettings):
     # Dev/testing
     llm_mock: bool = Field(default=False, validation_alias="LLM_MOCK")
     litellm_debug: bool = Field(default=False, validation_alias="LITELLM_DEBUG")
+    litellm_timeout_s: int = Field(default=45, validation_alias="LITELLM_TIMEOUT_S")
+    litellm_retries: int = Field(default=1, validation_alias="LITELLM_RETRIES")
 
     # Supabase Auth (frontend uses anon key; backend uses it to validate access tokens)
     supabase_url: str | None = Field(default=None, validation_alias="SUPABASE_URL")
     supabase_anon_key: str | None = Field(default=None, validation_alias="SUPABASE_ANON_KEY")
     sentry_dsn: str | None = Field(default=None, validation_alias="SENTRY_DSN")
+    stripe_secret_key: str | None = Field(default=None, validation_alias="STRIPE_SECRET_KEY")
+    stripe_webhook_secret: str | None = Field(default=None, validation_alias="STRIPE_WEBHOOK_SECRET")
+    checkout_success_url: str | None = Field(default=None, validation_alias="CHECKOUT_SUCCESS_URL")
+    checkout_cancel_url: str | None = Field(default=None, validation_alias="CHECKOUT_CANCEL_URL")
 
 
 settings = Settings()

@@ -247,18 +247,21 @@ def hire_agent(
 
 
 @router.post("/v1/agents/{agent_code}/checkout")
-def mock_checkout(
+def create_checkout(
     agent_code: str,
     db: Session = Depends(get_db),
     x_org_id: str | None = Header(default=None, alias="X-Org-Id"),
+    origin: str | None = Header(default=None, alias="Origin"),
 ) -> dict:
     """
-    Mock checkout endpoint - simulates Stripe without charging.
-    In production this will be replaced by a real Stripe checkout + subscription flow.
+    Checkout endpoint.
+    - If STRIPE_SECRET_KEY is configured, creates a Stripe Checkout Session.
+    - Otherwise falls back to mock checkout and activates immediately.
     """
     from fastapi import HTTPException
     import json
     import uuid
+    import requests
 
     org_id = x_org_id or "org_test"
 
@@ -281,14 +284,102 @@ def mock_checkout(
     if existing:
         raise HTTPException(status_code=400, detail="Agent already hired")
 
+    # Create org if needed.
     db.execute(
         text("insert into organizations (org_id, name) values (:org_id, :name) on conflict (org_id) do nothing"),
         {"org_id": org_id, "name": ""},
     )
 
-    mock_sub_id = f"mock_sub_{uuid.uuid4().hex[:12]}"
-    default_cfg = {"company_name": "", "tone": "", "additional": {"mock_subscription_id": mock_sub_id}}
+    frontend_origin = (origin or "").strip().rstrip("/")
+    if not frontend_origin:
+        if settings.checkout_success_url:
+            frontend_origin = settings.checkout_success_url.split("/dashboard")[0].rstrip("/")
+        elif settings.allowed_origins:
+            frontend_origin = settings.allowed_origins.split(",")[0].strip().rstrip("/")
 
+    success_url = (
+        settings.checkout_success_url
+        or f"{frontend_origin}/dashboard/my-agents?checkout=success"
+        or "http://localhost:3000/dashboard/my-agents?checkout=success"
+    )
+    cancel_url = (
+        settings.checkout_cancel_url
+        or f"{frontend_origin}/dashboard/agents/{agent_code}?checkout=cancelled"
+        or f"http://localhost:3000/dashboard/agents/{agent_code}?checkout=cancelled"
+    )
+
+    # Stripe-enabled path (real checkout session) with automatic fallback to mock on failure.
+    if settings.stripe_secret_key:
+        try:
+            stripe_payload = {
+                "mode": "subscription",
+                "success_url": success_url,
+                "cancel_url": cancel_url,
+                "client_reference_id": f"{org_id}:{agent_code}",
+                "metadata[org_id]": org_id,
+                "metadata[agent_code]": agent_code,
+                "line_items[0][price_data][currency]": "usd",
+                "line_items[0][price_data][unit_amount]": str(int(agent.price_cents)),
+                "line_items[0][price_data][product_data][name]": f"{agent.code} — {agent.name}",
+                "line_items[0][price_data][product_data][description]": (
+                    (agent.tagline or agent.description or "CreddyPens agent subscription")[:450]
+                ),
+                "line_items[0][price_data][recurring][interval]": "month",
+                "line_items[0][quantity]": "1",
+            }
+            resp = requests.post(
+                "https://api.stripe.com/v1/checkout/sessions",
+                headers={"Authorization": f"Bearer {settings.stripe_secret_key}"},
+                data=stripe_payload,
+                timeout=20,
+            )
+            if resp.status_code >= 400:
+                detail = f"Stripe checkout creation failed ({resp.status_code})"
+                try:
+                    stripe_err = resp.json().get("error", {}).get("message")
+                    if stripe_err:
+                        detail = f"{detail}: {stripe_err}"
+                except Exception:
+                    pass
+                raise HTTPException(status_code=502, detail=detail)
+
+            session = resp.json()
+            checkout_session_id = session.get("id", "")
+            checkout_url = session.get("url", "")
+
+            cfg = {
+                "company_name": "",
+                "tone": "",
+                "additional": {"stripe_checkout_session_id": checkout_session_id, "checkout_mode": "stripe"},
+            }
+            db.execute(
+                text(
+                    """
+                    insert into hired_agents (hired_agent_id, org_id, agent_code, status, configuration)
+                    values (:id, :org_id, :agent_code, 'active', cast(:cfg as jsonb));
+                    """
+                ),
+                {"id": str(uuid.uuid4()), "org_id": org_id, "agent_code": agent_code, "cfg": json.dumps(cfg)},
+            )
+            db.commit()
+
+            return {
+                "success": True,
+                "mode": "stripe",
+                "agent_code": agent_code,
+                "message": "Checkout session created.",
+                "checkout_session_id": checkout_session_id,
+                "checkout_url": checkout_url,
+            }
+        except HTTPException:
+            raise
+        except Exception as exc:
+            db.rollback()
+            raise HTTPException(status_code=502, detail=f"Stripe checkout failed: {exc.__class__.__name__}") from exc
+
+    # Mock fallback path.
+    mock_sub_id = f"mock_sub_{uuid.uuid4().hex[:12]}"
+    cfg = {"company_name": "", "tone": "", "additional": {"mock_subscription_id": mock_sub_id, "checkout_mode": "mock"}}
     db.execute(
         text(
             """
@@ -296,12 +387,13 @@ def mock_checkout(
             values (:id, :org_id, :agent_code, 'active', cast(:cfg as jsonb));
             """
         ),
-        {"id": str(uuid.uuid4()), "org_id": org_id, "agent_code": agent_code, "cfg": json.dumps(default_cfg)},
+        {"id": str(uuid.uuid4()), "org_id": org_id, "agent_code": agent_code, "cfg": json.dumps(cfg)},
     )
     db.commit()
 
     return {
         "success": True,
+        "mode": "mock",
         "agent_code": agent_code,
         "message": "Agent hired successfully (mock checkout - no payment processed)",
         "stripe_subscription_id": mock_sub_id,
@@ -497,28 +589,103 @@ def director_recommend(payload: dict, db: Session = Depends(get_db)) -> dict:
     ranked = sorted(agents, key=score, reverse=True)
     top = [a for a in ranked if score(a) > 0][:3] or ranked[:3]
 
-    recs = []
-    for a in top:
-        recs.append(
-            {
-                "agent_code": a.code,
-                "agent_name": a.name,
-                "role": a.name,
-                "reasoning": "Recommended based on your request and the Directorate catalog.",
-                "price_monthly": a.price_cents,
-                "department": a.department,
-            }
-        )
+    if settings.llm_mock:
+        recs = []
+        for a in top:
+            recs.append(
+                {
+                    "agent_code": a.code,
+                    "agent_name": a.name,
+                    "role": a.name,
+                    "reasoning": "Recommended based on your request and the Directorate catalog.",
+                    "price_monthly": a.price_cents,
+                    "department": a.department,
+                }
+            )
 
-    return {
-        "message": (
-            "Based on your needs, here are the best assets to deploy first. "
-            "If you tell me your industry and tone preference, I can refine the recommendation."
-        ),
-        "recommendations": recs,
-        "org_id": org_id,
-        "mock": settings.llm_mock,
-    }
+        return {
+            "message": (
+                "Based on your needs, here are the best assets to deploy first. "
+                "If you tell me your industry and tone preference, I can refine the recommendation."
+            ),
+            "recommendations": recs,
+            "org_id": org_id,
+            "mock": True,
+        }
+
+    fallback_lookup = {a.code: a for a in top}
+    catalog_brief = [
+        {
+            "agent_code": a.code,
+            "role": a.name,
+            "department": a.department,
+            "price_monthly": a.price_cents,
+            "tagline": a.tagline or "",
+        }
+        for a in top
+    ]
+    system_prompt = (
+        "You are The Director of The CreddyPens Directorate. Analyze the user's need and recommend up to 3 best-fit "
+        "agents from the provided catalog. Respond as strict JSON only with keys: message, recommendations. "
+        "recommendations must be an array of objects with keys: agent_code, role, reasoning."
+    )
+    user_prompt = json.dumps({"user_message": message, "catalog": catalog_brief})
+    try:
+        result = execute_via_litellm(
+            provider="anthropic",
+            model=settings.anthropic_sonnet_model or "claude-sonnet-4-5-20250929",
+            system=system_prompt,
+            user=user_prompt,
+        )
+        raw_text = (result.get("response") or "").strip()
+        if raw_text.startswith("```"):
+            raw_text = raw_text.strip("`")
+            raw_text = raw_text.replace("json\n", "", 1).strip()
+        parsed = json.loads(raw_text)
+        recs = []
+        for rec in parsed.get("recommendations", [])[:3]:
+            code = (rec.get("agent_code") or "").strip()
+            agent = fallback_lookup.get(code)
+            if not agent:
+                continue
+            recs.append(
+                {
+                    "agent_code": agent.code,
+                    "agent_name": agent.name,
+                    "role": rec.get("role") or agent.name,
+                    "reasoning": rec.get("reasoning") or "Recommended based on intent match.",
+                    "price_monthly": agent.price_cents,
+                    "department": agent.department,
+                }
+            )
+        if not recs:
+            raise ValueError("empty recommendation set")
+        return {
+            "message": parsed.get("message")
+            or "Here are the strongest fits from the Directorate based on your request.",
+            "recommendations": recs,
+            "org_id": org_id,
+            "mock": False,
+        }
+    except Exception:
+        recs = []
+        for a in top:
+            recs.append(
+                {
+                    "agent_code": a.code,
+                    "agent_name": a.name,
+                    "role": a.name,
+                    "reasoning": "Recommended based on your request and the Directorate catalog.",
+                    "price_monthly": a.price_cents,
+                    "department": a.department,
+                }
+            )
+        return {
+            "message": "I mapped your request to the closest operational assets.",
+            "recommendations": recs,
+            "org_id": org_id,
+            "mock": False,
+        }
 
 
 @router.post("/v1/agents/{agent_code}/execute", response_model=ExecuteOut)

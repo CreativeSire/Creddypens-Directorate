@@ -132,13 +132,13 @@ export default function DirectorChat() {
                   <div className="text-sm text-white/80 mt-2">{r.reasoning}</div>
                   <div className="flex gap-3 mt-3">
                     <Link
-                      href={`/agents/${encodeURIComponent(r.agent_code)}`}
+                      href={`/dashboard/agents/${encodeURIComponent(r.agent_code)}`}
                       className="px-4 py-2 border border-[#00F0FF]/30 hover:bg-[#00F0FF]/10 text-sm"
                     >
                       View Dossier
                     </Link>
                     <Link
-                      href={`/agents/${encodeURIComponent(r.agent_code)}`}
+                      href={`/dashboard/agents/${encodeURIComponent(r.agent_code)}`}
                       className="px-4 py-2 bg-[#FFB800] text-[#0A0F14] font-bold text-sm hover:bg-[#FFB800]/90"
                     >
                       Hire Now

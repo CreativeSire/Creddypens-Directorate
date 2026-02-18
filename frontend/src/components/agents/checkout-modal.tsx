@@ -21,6 +21,7 @@ type CheckoutModalProps = {
 export function CheckoutModal({ agent, orgId, onClose, onSuccess }: CheckoutModalProps) {
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [checkoutMode, setCheckoutMode] = useState<"mock" | "stripe" | null>(null);
 
   const price = Math.floor((agent.price_cents || 0) / 100);
 
@@ -36,13 +37,22 @@ export function CheckoutModal({ agent, orgId, onClose, onSuccess }: CheckoutModa
           "Content-Type": "application/json",
         },
       });
-      const data = (await res.json().catch(() => ({}))) as { detail?: string };
+      const data = (await res.json().catch(() => ({}))) as {
+        detail?: string;
+        mode?: "mock" | "stripe";
+        checkout_url?: string;
+      };
       if (!res.ok) throw new Error(data.detail || "Checkout failed");
+      setCheckoutMode(data.mode || null);
+
+      if (data.mode === "stripe" && data.checkout_url) {
+        toast.success("Redirecting to secure checkout...", { id: toastId });
+        window.location.assign(data.checkout_url);
+        return;
+      }
 
       toast.success(`Deployment authorized for ${agent.code}`, { id: toastId });
-      setTimeout(() => {
-        onSuccess();
-      }, 700);
+      setTimeout(() => onSuccess(), 700);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Checkout failed", { id: toastId });
       setError(err instanceof Error ? err.message : "Checkout failed");
@@ -82,10 +92,13 @@ export function CheckoutModal({ agent, orgId, onClose, onSuccess }: CheckoutModa
             <div className="flex gap-3">
               <CreditCard className="w-5 h-5 text-[#FFB800] flex-shrink-0 mt-0.5" />
               <div>
-                <div className="text-xs text-[#FFB800] tracking-[0.25em] mb-1">MOCK CHECKOUT MODE</div>
+                <div className="text-xs text-[#FFB800] tracking-[0.25em] mb-1">
+                  {checkoutMode === "stripe" ? "SECURE CHECKOUT MODE" : "MOCK CHECKOUT MODE"}
+                </div>
                 <div className="text-xs text-white/70 leading-relaxed">
-                  Payment processing is simulated. No charges will be made. Real billing will be enabled before public
-                  launch.
+                  {checkoutMode === "stripe"
+                    ? "You will be redirected to Stripe Checkout to complete subscription setup."
+                    : "Payment processing is simulated. No charges will be made. Real billing will be enabled before public launch."}
                 </div>
               </div>
             </div>
