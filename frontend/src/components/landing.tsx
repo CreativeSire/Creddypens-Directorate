@@ -3,8 +3,10 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { Lock, Search, Shield, Users, Zap, ChevronRight } from "lucide-react";
+import { motion } from "framer-motion";
 
 import type { Agent } from "@/lib/types";
+import { Skeleton } from "@/components/ui/skeleton";
 
 type Department = {
   id: number;
@@ -27,7 +29,7 @@ function formatPrice(cents: number) {
   return `$${Math.floor(cents / 100)}/mo`;
 }
 
-export default function Landing({ agents }: { agents: Agent[] }) {
+export default function Landing({ agents, loading }: { agents: Agent[]; loading?: boolean }) {
   const [selectedDept, setSelectedDept] = useState<number | null>(null);
   const [scanActive, setScanActive] = useState(false);
   const [query, setQuery] = useState("");
@@ -128,7 +130,12 @@ export default function Landing({ agents }: { agents: Agent[] }) {
 
       {/* Hero Section */}
       <section className="relative max-w-7xl mx-auto px-6 py-16">
-        <div className="text-center mb-12">
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.6 }}
+          className="text-center mb-12"
+        >
           <div className="inline-block mb-4 px-4 py-2 border border-[#FFB800] bg-[#FFB800]/10 backdrop-blur-sm">
             <p className="text-[#FFB800] text-sm tracking-widest">⚠ SYNTHETIC WORKFORCE DEPLOYMENT SYSTEM</p>
           </div>
@@ -172,7 +179,7 @@ export default function Landing({ agents }: { agents: Agent[] }) {
               </div>
             )}
           </div>
-        </div>
+        </motion.div>
 
         {/* Stats */}
         <div className="grid grid-cols-4 gap-6 max-w-4xl mx-auto mb-16">
@@ -239,11 +246,27 @@ export default function Landing({ agents }: { agents: Agent[] }) {
         </div>
 
         <div className="grid grid-cols-3 gap-6">
-          {filteredFeatured.map((agent) => (
-            <div
-              key={agent.code}
-              className="border border-[#00F0FF]/30 bg-gradient-to-br from-[#00F0FF]/5 to-transparent backdrop-blur-sm overflow-hidden group hover:border-[#FFB800] transition-all"
-            >
+          {loading ? (
+            [1, 2, 3].map((i) => (
+              <div
+                key={i}
+                className="border border-[#00F0FF]/30 bg-gradient-to-br from-[#00F0FF]/5 to-transparent backdrop-blur-sm p-6 space-y-4"
+              >
+                <Skeleton className="h-4 w-24" />
+                <Skeleton className="h-8 w-40" />
+                <Skeleton className="h-16 w-full" />
+                <Skeleton className="h-10 w-full" />
+              </div>
+            ))
+          ) : (
+            filteredFeatured.map((agent, idx) => (
+              <motion.div
+                key={agent.code}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.4, delay: idx * 0.1 }}
+                className="border border-[#00F0FF]/30 bg-gradient-to-br from-[#00F0FF]/5 to-transparent backdrop-blur-sm overflow-hidden group hover:border-[#FFB800] transition-all"
+              >
               {/* Agent Header */}
               <div className="border-b border-[#00F0FF]/30 p-4 bg-[#00F0FF]/5">
                 <div className="flex items-start justify-between mb-2">
@@ -296,8 +319,9 @@ export default function Landing({ agents }: { agents: Agent[] }) {
                   [ VIEW DOSSIER ]
                 </Link>
               </div>
-            </div>
-          ))}
+            </motion.div>
+            ))
+          )}
         </div>
       </section>
 

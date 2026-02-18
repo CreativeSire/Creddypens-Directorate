@@ -1,6 +1,9 @@
+"use client";
+
 import Link from "next/link";
 
 import type { Agent } from "@/lib/types";
+import { motion } from "framer-motion";
 
 function formatPrice(cents: number) {
   const dollars = Math.floor((cents || 0) / 100);
@@ -10,7 +13,11 @@ function formatPrice(cents: number) {
 export function AgentCard({ agent }: { agent: Agent }) {
   const active = agent.status === "active";
   return (
-    <div className="border border-[#00F0FF]/30 bg-[#0D1520] p-5 hover:border-[#FFB800]/60 transition-colors">
+    <motion.div
+      whileHover={{ y: -4, scale: 1.02 }}
+      transition={{ duration: 0.2 }}
+      className="border border-[#00F0FF]/30 bg-[#0D1520] p-5 hover:border-[#FFB800]/60 transition-colors"
+    >
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="text-xs text-[#00F0FF] tracking-[0.25em]">
@@ -52,6 +59,6 @@ export function AgentCard({ agent }: { agent: Agent }) {
           </div>
         )}
       </div>
-    </div>
+    </motion.div>
   );
 }
