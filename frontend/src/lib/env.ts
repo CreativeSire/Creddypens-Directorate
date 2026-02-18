@@ -1,5 +1,8 @@
 export function apiBaseUrl() {
-  return process.env.NEXT_PUBLIC_API_URL?.trim() || "http://127.0.0.1:8010";
+  const configured = process.env.NEXT_PUBLIC_API_URL?.trim();
+  if (configured) return configured;
+  if (typeof window !== "undefined") return "";
+  return "http://127.0.0.1:8010";
 }
 
 export function supabaseUrl() {
@@ -9,4 +12,3 @@ export function supabaseUrl() {
 export function supabaseAnonKey() {
   return process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim() || "";
 }
-
