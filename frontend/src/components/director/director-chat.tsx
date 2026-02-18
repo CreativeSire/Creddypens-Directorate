@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { motion } from "framer-motion";
 
 import { apiBaseUrl } from "@/lib/env";
 import { getOrgId } from "@/lib/org";
@@ -32,15 +33,17 @@ export default function DirectorChat() {
   ]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [isTyping, setIsTyping] = useState(false);
   const [recs, setRecs] = useState<Rec[]>([]);
 
   async function send() {
     const trimmed = input.trim();
-    if (!trimmed) return;
+    if (!trimmed || loading) return;
 
     setMessages((m) => [...m, { from: "user", text: trimmed }]);
     setInput("");
     setLoading(true);
+    setIsTyping(true);
     setRecs([]);
 
     try {
@@ -64,6 +67,7 @@ export default function DirectorChat() {
       ]);
     } finally {
       setLoading(false);
+      setIsTyping(false);
     }
   }
 
@@ -90,10 +94,21 @@ export default function DirectorChat() {
             </div>
           </div>
         ))}
-        {loading ? (
+
+        {isTyping ? (
           <div className="flex justify-start">
-            <div className="max-w-[80%] border border-[#FFB800]/30 bg-[#FFB800]/10 p-3 text-sm text-white">
-              Processing…
+            <div className="bg-[#FFB800]/5 border border-[#FFB800]/20 p-4 flex items-center gap-3">
+              <motion.div className="flex gap-1">
+                {[0, 1, 2].map((i) => (
+                  <motion.span
+                    key={i}
+                    className="w-2 h-2 bg-[#FFB800] rounded-full"
+                    animate={{ y: [0, -8, 0] }}
+                    transition={{ duration: 0.6, repeat: Infinity, delay: i * 0.15 }}
+                  />
+                ))}
+              </motion.div>
+              <span className="text-xs text-[#00F0FF]/60">The Director is analyzing...</span>
             </div>
           </div>
         ) : null}

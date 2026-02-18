@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 
 import Link from "next/link";
+import CountUp from "react-countup";
+import { AnimatePresence, motion } from "framer-motion";
 
 import { apiBaseUrl } from "@/lib/env";
 import { getOrgId } from "@/lib/org";
@@ -14,6 +16,7 @@ type StatCardProps = {
 };
 
 function StatCard({ label, value, color }: StatCardProps) {
+  const isNumber = typeof value === "number";
   const colorClass =
     color === "cyan"
       ? "text-[#00F0FF]"
@@ -21,10 +24,17 @@ function StatCard({ label, value, color }: StatCardProps) {
         ? "text-[#00FF00]"
         : "text-[#FFB800]";
   return (
-    <div className="border border-[#00F0FF]/30 bg-[#00F0FF]/5 p-4">
+    <motion.div
+      initial={{ scale: 0.9, opacity: 0 }}
+      animate={{ scale: 1, opacity: 1 }}
+      transition={{ duration: 0.3 }}
+      className="border border-[#00F0FF]/30 bg-[#00F0FF]/5 p-4 hover:border-[#00F0FF]/50 transition-all"
+    >
       <div className="text-xs text-[#00F0FF]/60 tracking-[0.25em]">{label}</div>
-      <div className={`text-3xl font-bold mt-2 ${colorClass}`}>{value}</div>
-    </div>
+      <div className={`text-3xl font-bold mt-2 ${colorClass}`}>
+        {isNumber ? <CountUp end={value} duration={1.5} /> : value}
+      </div>
+    </motion.div>
   );
 }
 
@@ -117,17 +127,25 @@ export default function StatsPanel() {
           <div className="text-sm text-[#00F0FF]/60 py-6 text-center">No activity yet. Run a demo chat to begin.</div>
         ) : (
           <div className="space-y-2 max-h-[420px] overflow-y-auto">
-            {stats.recent_activities.map((a, idx) => (
-              <div key={`${a.agent_code}-${idx}`} className="border-b border-[#00F0FF]/20 py-2 last:border-0">
-                <div className="text-xs text-white">
-                  {a.agent_code} <span className="text-[#00F0FF]/60">— {a.agent_name}</span>
-                </div>
-                <div className="text-xs text-[#00F0FF]/60 mt-1">{a.task_summary}</div>
-                <div className="text-xs text-[#00F0FF]/40 mt-1">
-                  {new Date(a.timestamp).toLocaleString()} • {a.latency_ms}ms
-                </div>
-              </div>
-            ))}
+            <AnimatePresence mode="popLayout" initial={false}>
+              {stats.recent_activities.map((a) => (
+                <motion.div
+                  key={`${a.agent_code}-${a.timestamp}-${a.latency_ms}`}
+                  initial={{ opacity: 0, x: -20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 20 }}
+                  className="border-b border-[#00F0FF]/20 py-2 last:border-0"
+                >
+                  <div className="text-xs text-white">
+                    {a.agent_code} <span className="text-[#00F0FF]/60">— {a.agent_name}</span>
+                  </div>
+                  <div className="text-xs text-[#00F0FF]/60 mt-1">{a.task_summary}</div>
+                  <div className="text-xs text-[#00F0FF]/40 mt-1">
+                    {new Date(a.timestamp).toLocaleString()} • {a.latency_ms}ms
+                  </div>
+                </motion.div>
+              ))}
+            </AnimatePresence>
           </div>
         )}
 
