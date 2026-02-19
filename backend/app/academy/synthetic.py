@@ -116,13 +116,10 @@ class SyntheticTrainer:
                         continue
 
                     try:
-                        if not agent.llm_provider or not agent.llm_model:
-                            raise LLMError("Agent LLM provider/model is not configured.")
-
                         system = (agent.system_prompt or "").strip() or f"You are {agent.name}."
                         agent_llm = execute_via_litellm(
-                            provider=agent.llm_provider,
-                            model=agent.llm_model,
+                            provider=agent.llm_provider or "",
+                            model=agent.llm_model or "",
                             system=system,
                             user=user_message,
                         )

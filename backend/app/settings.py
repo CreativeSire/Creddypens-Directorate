@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     litellm_debug: bool = Field(default=False, validation_alias="LITELLM_DEBUG")
     litellm_timeout_s: int = Field(default=45, validation_alias="LITELLM_TIMEOUT_S")
     litellm_retries: int = Field(default=1, validation_alias="LITELLM_RETRIES")
+    multi_llm_router_enabled: bool = Field(default=True, validation_alias="MULTI_LLM_ROUTER_ENABLED")
+    multi_llm_cache_enabled: bool = Field(default=True, validation_alias="MULTI_LLM_CACHE_ENABLED")
+    multi_llm_cache_ttl_s: int = Field(default=3600, validation_alias="MULTI_LLM_CACHE_TTL_S")
 
     # Supabase Auth (frontend uses anon key; backend uses it to validate access tokens)
     supabase_url: str | None = Field(default=None, validation_alias="SUPABASE_URL")

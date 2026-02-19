@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.agents.prompts import system_prompt_for_agent
 from app.db import get_db
 from app.llm.litellm_client import LLMError, execute_via_litellm
+from app.llm.multi_router import get_multi_llm_router
 from app.models import AgentCatalog, HiredAgent
 from app.schemas import AgentDetailOut, AgentOut
 from app.schemas_chat import ChatIn, ChatOut
@@ -22,6 +23,11 @@ router = APIRouter()
 @router.get("/health")
 async def health() -> dict:
     return {"ok": True, "llm_mock": settings.llm_mock}
+
+
+@router.get("/v1/llm/router/stats")
+def llm_router_stats() -> dict:
+    return get_multi_llm_router().cost_summary()
 
 
 @router.get("/v1/agents", response_model=list[AgentOut])
@@ -189,11 +195,11 @@ def chat_with_agent(code: str, payload: ChatIn, db: Session = Depends(get_db)) -
     system = system_prompt_for_agent(code)
     try:
         # Legacy demo route; for production use the /execute endpoint which reads provider/model from DB.
-        if not agent.llm_provider or not agent.llm_model:
+        if (not agent.llm_provider or not agent.llm_model) and not settings.multi_llm_router_enabled:
             raise LLMError("Agent LLM provider/model is not configured.")
         result = execute_via_litellm(
-            provider=agent.llm_provider,
-            model=agent.llm_model,
+            provider=agent.llm_provider or "",
+            model=agent.llm_model or "",
             system=system,
             user=payload.message,
         )
@@ -718,7 +724,7 @@ def execute_agent(
     if not hired:
         raise HTTPException(status_code=403, detail="Agent not hired for organization")
 
-    if not agent.llm_provider or not agent.llm_model:
+    if (not agent.llm_provider or not agent.llm_model) and not settings.multi_llm_router_enabled:
         raise HTTPException(status_code=503, detail="Agent model routing is not configured")
 
     system_prompt = (agent.system_prompt or "").strip() or system_prompt_for_agent(agent_code)
@@ -736,8 +742,8 @@ def execute_agent(
     quality_score = 0.85
     try:
         result = execute_via_litellm(
-            provider=agent.llm_provider,
-            model=agent.llm_model,
+            provider=agent.llm_provider or "",
+            model=agent.llm_model or "",
             system=system_prompt,
             user=payload.message,
             trace_id=trace_id,

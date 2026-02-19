@@ -67,6 +67,39 @@ def execute_via_litellm(
     trace_id: str | None = None,
 ) -> dict[str, Any]:
     trace_id = trace_id or str(uuid.uuid4())
+
+    # Smart multi-LLM routing path (with cache + cost tracking).
+    if getattr(settings, "multi_llm_router_enabled", False):
+        try:
+            from app.llm.multi_router import LLMRequest, get_multi_llm_router
+
+            routed = get_multi_llm_router().execute(
+                LLMRequest(
+                    system=system,
+                    user=user,
+                    trace_id=trace_id,
+                    preferred_provider=(provider or None),
+                    preferred_model=(model or None),
+                )
+            )
+            return {
+                "trace_id": routed.get("trace_id") or trace_id,
+                "model_used": routed.get("model_used") or "",
+                "latency_ms": int(routed.get("latency_ms") or 0),
+                "response": routed.get("response") or "",
+                "tokens_used": int(routed.get("tokens_used") or 0),
+                "raw": routed.get("raw") or {},
+                "cached": bool(routed.get("cached")),
+                "route_level": routed.get("route_level"),
+                "complexity_score": routed.get("complexity_score"),
+            }
+        except Exception as e:
+            # If request relies entirely on router (no explicit provider/model), surface router failure directly.
+            if not provider or not model:
+                raise LLMError(f"Smart router execution failed: {e}") from e
+            # Otherwise fall back to legacy direct LiteLLM path.
+            pass
+
     model_used = to_litellm_model(provider, model)
 
     if settings.llm_mock:
