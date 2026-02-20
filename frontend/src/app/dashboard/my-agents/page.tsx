@@ -8,6 +8,7 @@ import { apiBaseUrl } from "@/lib/env";
 import { getOrgId } from "@/lib/org";
 import { toast } from "@/lib/toast";
 import { HiredAgentCard } from "@/components/agents/hired-agent-card";
+import { WorkflowRunner } from "@/components/agents/workflow-runner";
 import { EmptyState } from "@/components/ui/empty-state";
 import { MyAgentsSkeleton } from "@/components/skeletons/my-agents-skeleton";
 import { ChatSkeleton } from "@/components/skeletons/chat-skeleton";
@@ -104,6 +105,14 @@ export default function MyAgentsPage() {
     return hiredAgents.filter((h) => slugifyDepartment(h.agent.department) === filter);
   }, [filter, hiredAgents]);
 
+  const workflowAgents = useMemo(() => {
+    return hiredAgents.map((item) => ({
+      code: item.agent.agent_code,
+      name: item.agent.name,
+      department: item.agent.department,
+    }));
+  }, [hiredAgents]);
+
   if (loading) {
     return <MyAgentsSkeleton />;
   }
@@ -137,6 +146,8 @@ export default function MyAgentsPage() {
 
   return (
     <div>
+      <WorkflowRunner orgId={orgId} agents={workflowAgents} />
+
       <div className="flex justify-between items-center mb-8">
         <div>
           <h1 className="text-3xl text-white tracking-wide font-semibold">MY AGENTS</h1>
@@ -198,6 +209,11 @@ export default function MyAgentsPage() {
           orgId={orgId}
           onClose={() => setSelectedAgent(null)}
           onAfterMessage={() => void fetchHiredAgents()}
+          onSwitchAgent={(code) => {
+            if (!code) return;
+            setSelectedAgent(code);
+            void fetchHiredAgents();
+          }}
         />
       )}
     </div>

@@ -6,4 +6,6 @@ psycopg[binary]==3.3.2
 python-dotenv==1.0.1
 litellm==1.77.3
 requests==2.32.5
+aiohttp==3.12.15
+croniter==6.0.0
 sentry-sdk==2.31.0

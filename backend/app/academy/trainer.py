@@ -20,7 +20,7 @@ class BatchTrainer:
     def __init__(self) -> None:
         self.synthetic_trainer = SyntheticTrainer()
 
-    async def train_all_agents(self, *, conversations_per_agent: int = 100, batch_size: int = 5, wait_s: int = 30) -> list[dict[str, Any]]:
+    async def train_all_agents(self, *, conversations_per_agent: int = 100, batch_size: int = 5, wait_s: int = 60) -> list[dict[str, Any]]:
         conversations_per_agent = max(1, min(500, int(conversations_per_agent)))
         batch_size = max(1, min(12, int(batch_size)))
         wait_s = max(0, min(300, int(wait_s)))
@@ -124,4 +124,3 @@ class BatchTrainer:
             out_rows.append(d)
 
         return {"total_agents": len(rows), "avg_quality_overall": round(avg_quality, 2), "agents": out_rows}
-

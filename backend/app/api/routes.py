@@ -1,21 +1,214 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import asyncio
 import json
+import re
+import requests
+import uuid
 
-from fastapi import APIRouter, Depends, Header
-from sqlalchemy import select, text
+from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
+from sqlalchemy import func as sqlfunc, select, text
 from sqlalchemy.orm import Session
 
-from app.agents.prompts import system_prompt_for_agent
-from app.db import get_db
+from app.agents.prompts import inject_domain_block, system_prompt_for_agent
+from app.db import SessionLocal, get_db
 from app.llm.litellm_client import LLMError, execute_via_litellm
 from app.llm.multi_router import get_multi_llm_router
 from app.models import AgentCatalog, HiredAgent
+from app.runtime.hooks import RuntimeEvent, hook_bus
+from app.runtime.model_policy import model_policy_service
+from app.runtime.session_manager import session_manager
+from app.runtime.tool_policy import tool_policy_service
+from app.runtime.tool_registry import ToolCallContext, tool_registry
 from app.schemas import AgentDetailOut, AgentOut
 from app.schemas_chat import ChatIn, ChatOut
-from app.schemas_execute import ExecuteIn, ExecuteOut
+from app.schemas_execute import ExecuteContext, ExecuteIn, ExecuteOut, SuggestedAgent
 from app.settings import settings
+
+try:
+    from croniter import croniter
+except Exception:  # pragma: no cover
+    croniter = None
+
+# Matches [REFER:CODE] anywhere in a response, e.g. [REFER:LEGAL-01] or [REFER:Author-01]
+_REFER_PATTERN = re.compile(r"\[REFER:([A-Za-z][A-Za-z0-9\-]*)\]")
+_OUTPUT_FORMATS = {"text", "markdown", "json", "email", "csv", "code", "presentation"}
+
+
+def _infer_department_from_message(message: str) -> str | None:
+    content = (message or "").lower()
+    keyword_map: dict[str, tuple[str, ...]] = {
+        "Customer Experience": ("support", "ticket", "complaint", "customer", "onboarding", "faq"),
+        "Sales & Business Development": ("lead", "prospect", "pipeline", "outreach", "closing", "sales"),
+        "Marketing & Creative": ("blog", "copy", "campaign", "social", "content", "brand"),
+        "Operations & Admin": ("calendar", "schedule", "priorities", "travel", "admin", "process"),
+        "Technical & IT": ("api", "code", "bug", "deploy", "infra", "security", "database", "sql"),
+        "Specialized Services": ("legal", "compliance", "finance", "audit", "contract", "policy"),
+    }
+    for department, keywords in keyword_map.items():
+        if any(word in content for word in keywords):
+            return department
+    return None
+
+
+def _pick_colleague_for_department(
+    *,
+    db: Session,
+    department: str,
+    current_agent_code: str,
+    org_id: str,
+    message: str,
+    current_agent_name: str,
+) -> SuggestedAgent | None:
+    colleague = (
+        db.execute(
+            select(AgentCatalog)
+            .where(AgentCatalog.status == "active")
+            .where(AgentCatalog.department == department)
+            .where(AgentCatalog.code != current_agent_code)
+            .order_by(AgentCatalog.code.asc())
+        )
+        .scalars()
+        .first()
+    )
+    if not colleague:
+        return None
+
+    hired = (
+        db.execute(
+            select(HiredAgent)
+            .where(HiredAgent.org_id == org_id)
+            .where(HiredAgent.agent_code == colleague.code)
+            .where(HiredAgent.status == "active")
+        )
+        .scalars()
+        .first()
+    )
+
+    return SuggestedAgent(
+        code=colleague.code,
+        name=colleague.name,
+        tagline=colleague.tagline,
+        department=colleague.department,
+        reason=(
+            f"This request is better handled by {colleague.name} in {colleague.department}. "
+            f"{current_agent_name} provided a general answer and recommends a specialist."
+        ),
+        is_hired=bool(hired),
+        handoff_context=message,
+    )
+
+
+def _session_memory_block(
+    *,
+    db: Session,
+    org_id: str,
+    agent_code: str,
+    session_id: str | None,
+) -> str:
+    if not settings.multi_turn_memory_enabled:
+        return ""
+    sid = (session_id or "").strip()
+    if not sid:
+        return ""
+
+    turns = max(0, int(settings.multi_turn_memory_turns or 0))
+    if turns == 0:
+        return ""
+
+    rows = (
+        db.execute(
+            text(
+                """
+                select message, response
+                from interaction_logs
+                where org_id = :org_id
+                  and agent_code = :agent_code
+                  and session_id = :session_id
+                order by created_at desc
+                limit :limit;
+                """
+            ),
+            {
+                "org_id": org_id,
+                "agent_code": agent_code,
+                "session_id": sid,
+                "limit": turns,
+            },
+        )
+        .mappings()
+        .all()
+    )
+    if not rows:
+        return ""
+
+    rows = list(reversed(rows))
+    lines = ["Recent conversation history (same session):"]
+    for row in rows:
+        user = str(row.get("message") or "").strip()
+        assistant = str(row.get("response") or "").strip()
+        if user:
+            lines.append(f"User: {user}")
+        if assistant:
+            lines.append(f"Assistant: {assistant}")
+    return "\n".join(lines)
+
+
+def _to_context_lines(context: ExecuteContext) -> list[str]:
+    context_lines: list[str] = []
+    if context.company_name:
+        context_lines.append(f"Company: {context.company_name}")
+    if context.tone:
+        context_lines.append(f"Tone: {context.tone}")
+    if context.output_format:
+        fmt = context.output_format.strip().lower()
+        if fmt in _OUTPUT_FORMATS:
+            context_lines.append(f"Output format requested: {fmt}")
+            if fmt == "markdown":
+                context_lines.append("Return markdown with clear headings and concise sections.")
+            elif fmt == "json":
+                context_lines.append("Return strictly valid JSON only.")
+            elif fmt == "email":
+                context_lines.append("Return a ready-to-send email with subject and body.")
+            elif fmt == "csv":
+                context_lines.append("Return CSV content with headers and rows.")
+            elif fmt == "code":
+                context_lines.append("Return code in fenced code blocks with brief usage notes.")
+            elif fmt == "presentation":
+                context_lines.append("Return a slide-by-slide outline with titles and key bullets.")
+    if context.web_search:
+        context_lines.append("Web search mode requested by user. Use current information when available.")
+    if context.doc_retrieval:
+        context_lines.append("Document retrieval enabled. Use internal knowledge base context when relevant.")
+    if context.deep_research:
+        context_lines.append("Deep research mode enabled. Provide a structured comprehensive answer.")
+    if context.attachments:
+        attachment_lines: list[str] = []
+        for attachment in context.attachments[:5]:
+            item = f"- {attachment.name}"
+            if attachment.mime_type:
+                item += f" ({attachment.mime_type})"
+            if attachment.content_excerpt:
+                item += f": {attachment.content_excerpt[:240]}"
+            attachment_lines.append(item)
+        if attachment_lines:
+            context_lines.append("Attachments provided:\n" + "\n".join(attachment_lines))
+    if context.additional:
+        context_lines.append(f"Additional: {context.additional}")
+    return context_lines
+
+
+def _next_run_at(cron_expression: str, tz_name: str = "UTC") -> datetime | None:
+    if not croniter:
+        return None
+    base = datetime.now(timezone.utc)
+    try:
+        return croniter(cron_expression, base).get_next(datetime)
+    except Exception:
+        return None
 
 router = APIRouter()
 
@@ -28,6 +221,20 @@ async def health() -> dict:
 @router.get("/v1/llm/router/stats")
 def llm_router_stats() -> dict:
     return get_multi_llm_router().cost_summary()
+
+
+@router.get("/v1/llm/router/catalog")
+def llm_router_catalog() -> dict:
+    router_instance = get_multi_llm_router()
+    items = []
+    for name, provider in router_instance.providers.items():
+        items.append(
+            {
+                "provider": name,
+                "default_model": getattr(provider, "default_model", ""),
+            }
+        )
+    return {"providers": items}
 
 
 @router.get("/v1/agents", response_model=list[AgentOut])
@@ -727,32 +934,176 @@ def execute_agent(
     if (not agent.llm_provider or not agent.llm_model) and not settings.multi_llm_router_enabled:
         raise HTTPException(status_code=503, detail="Agent model routing is not configured")
 
+    # Build system prompt: start from stored prompt (or fallback), then inject domain boundary block.
     system_prompt = (agent.system_prompt or "").strip() or system_prompt_for_agent(agent_code)
-    context_lines: list[str] = []
-    if payload.context.company_name:
-        context_lines.append(f"Company: {payload.context.company_name}")
-    if payload.context.tone:
-        context_lines.append(f"Tone: {payload.context.tone}")
-    if payload.context.additional:
-        context_lines.append(f"Additional: {payload.context.additional}")
+    system_prompt = inject_domain_block(system_prompt, agent)
+
+    context_lines = _to_context_lines(payload.context)
+    memory_block = _session_memory_block(
+        db=db,
+        org_id=org_id,
+        agent_code=agent_code,
+        session_id=payload.session_id,
+    )
+    if memory_block:
+        context_lines.append(memory_block)
+    try:
+        session_id = session_manager.ensure_session(
+            org_id=org_id,
+            agent_code=agent_code,
+            session_id=payload.session_id,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=429, detail=str(e)) from e
+    session_context = session_manager.render_context_block(
+        org_id=org_id,
+        session_id=session_id,
+        agent_code=agent_code,
+    )
+    if session_context:
+        context_lines.append(session_context)
     if context_lines:
         system_prompt = system_prompt + "\n\nClient Context:\n" + "\n".join(context_lines)
 
     trace_id = str(uuid.uuid4())
     quality_score = 0.85
+    hook_bus.emit(
+        RuntimeEvent(
+            event_type="session.request_start",
+            org_id=org_id,
+            session_id=session_id,
+            agent_code=agent_code,
+            payload={"trace_id": trace_id},
+        )
+    )
     try:
+        session_manager.append_message(
+            org_id=org_id,
+            session_id=session_id,
+            agent_code=agent_code,
+            role="user",
+            content=payload.message,
+            metadata={"trace_id": trace_id},
+        )
         result = execute_via_litellm(
             provider=agent.llm_provider or "",
             model=agent.llm_model or "",
             system=system_prompt,
             user=payload.message,
             trace_id=trace_id,
+            enable_search=bool(payload.context.web_search),
+            enable_docs=bool(payload.context.doc_retrieval),
+            org_id=org_id,
+            session_id=session_id,
+            agent_code=agent_code,
         )
     except LLMError as e:
+        hook_bus.emit(
+            RuntimeEvent(
+                event_type="session.request_error",
+                org_id=org_id,
+                session_id=session_id,
+                agent_code=agent_code,
+                payload={"trace_id": trace_id, "error": str(e)},
+            )
+        )
         raise HTTPException(status_code=503, detail=str(e)) from e
 
     response_text = result.get("response") or result.get("content") or result.get("text") or ""
     tokens_used = int(result.get("tokens_used") or 0)
+    session_manager.append_message(
+        org_id=org_id,
+        session_id=session_id,
+        agent_code=agent_code,
+        role="assistant",
+        content=response_text,
+        metadata={"trace_id": trace_id, "model_used": result.get("model_used"), "search_used": bool(result.get("search_used")), "docs_used": bool(result.get("docs_used"))},
+    )
+    hook_bus.emit(
+        RuntimeEvent(
+            event_type="session.request_complete",
+            org_id=org_id,
+            session_id=session_id,
+            agent_code=agent_code,
+            payload={
+                "trace_id": trace_id,
+                "latency_ms": int(result.get("latency_ms") or 0),
+                "model_used": result.get("model_used"),
+                "search_used": bool(result.get("search_used")),
+                "docs_used": bool(result.get("docs_used")),
+            },
+        )
+    )
+
+    # --- Referral detection ---------------------------------------------------
+    # If the agent included [REFER:CODE] it means the question is outside its domain.
+    # Strip the tag from the visible response and build a SuggestedAgent payload.
+    referral_triggered = False
+    suggested_agent_out: SuggestedAgent | None = None
+
+    refer_match = _REFER_PATTERN.search(response_text)
+    if refer_match:
+        referral_triggered = True
+        referred_code_raw = refer_match.group(1)
+        # Strip ALL occurrences of [REFER:...] from the visible response.
+        response_text = _REFER_PATTERN.sub("", response_text).strip()
+
+        # Resolve the referred agent: exact match first, then case-insensitive fallback.
+        referred_agent = (
+            db.execute(select(AgentCatalog).where(AgentCatalog.code == referred_code_raw))
+            .scalars()
+            .first()
+        )
+        if not referred_agent:
+            referred_agent = (
+                db.execute(
+                    select(AgentCatalog).where(
+                        sqlfunc.lower(AgentCatalog.code) == referred_code_raw.lower()
+                    )
+                )
+                .scalars()
+                .first()
+            )
+
+        if referred_agent:
+            # Check whether the org already has this agent hired (free handoff vs hire gate).
+            referred_hired = (
+                db.execute(
+                    select(HiredAgent)
+                    .where(HiredAgent.org_id == org_id)
+                    .where(HiredAgent.agent_code == referred_agent.code)
+                    .where(HiredAgent.status == "active")
+                )
+                .scalars()
+                .first()
+            )
+            suggested_agent_out = SuggestedAgent(
+                code=referred_agent.code,
+                name=referred_agent.name,
+                tagline=referred_agent.tagline,
+                department=referred_agent.department,
+                reason=(
+                    f"This question falls outside {agent.name}'s training. "
+                    f"{referred_agent.name} is trained specifically for this."
+                ),
+                is_hired=bool(referred_hired),
+                handoff_context=payload.message,
+            )
+    if not suggested_agent_out:
+        inferred_department = _infer_department_from_message(payload.message)
+        current_department = (agent.department or "").strip()
+        if inferred_department and inferred_department != current_department:
+            suggested_agent_out = _pick_colleague_for_department(
+                db=db,
+                department=inferred_department,
+                current_agent_code=agent_code,
+                org_id=org_id,
+                message=payload.message,
+                current_agent_name=agent.name,
+            )
+            if suggested_agent_out:
+                referral_triggered = True
+    # --------------------------------------------------------------------------
 
     interaction_id: str | None = None
 
@@ -795,12 +1146,901 @@ def execute_agent(
         agent_code=agent_code,
         response=response_text,
         model_used=result["model_used"],
+        search_used=bool(result.get("search_used")),
+        docs_used=bool(result.get("docs_used")),
         latency_ms=int(result["latency_ms"]),
         tokens_used=tokens_used,
         interaction_id=interaction_id,
         trace_id=result["trace_id"],
-        session_id=payload.session_id,
+        session_id=session_id,
+        referral_triggered=referral_triggered,
+        suggested_agent=suggested_agent_out,
     )
+
+
+@router.post("/v1/agents/{agent_code}/execute/stream")
+async def execute_agent_stream(
+    agent_code: str,
+    payload: ExecuteIn,
+    db: Session = Depends(get_db),
+    x_org_id: str | None = Header(default=None, alias="X-Org-Id"),
+):
+    org_id = x_org_id or "org_test"
+    result = execute_agent(agent_code=agent_code, payload=payload, db=db, x_org_id=org_id)
+
+    async def event_gen():
+        words = result.response.split(" ")
+        emitted = ""
+        yield _sse_frame("meta", {"session_id": result.session_id, "trace_id": result.trace_id, "model_used": result.model_used})
+        for idx, word in enumerate(words):
+            emitted = f"{emitted} {word}".strip()
+            yield _sse_frame("token", {"index": idx, "token": word, "partial": emitted})
+            await asyncio.sleep(0.01)
+        yield _sse_frame(
+            "done",
+            {
+                "response": result.response,
+                "latency_ms": result.latency_ms,
+                "tokens_used": result.tokens_used,
+                "search_used": result.search_used,
+                "docs_used": result.docs_used,
+                "interaction_id": result.interaction_id,
+            },
+        )
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream")
+
+
+class SessionCreateIn(BaseModel):
+    agent_code: str = Field(min_length=1, max_length=64)
+    session_id: str | None = Field(default=None, min_length=1, max_length=128)
+    title: str | None = Field(default=None, max_length=250)
+
+
+class SessionOut(BaseModel):
+    session_id: str
+    org_id: str
+    agent_code: str
+    status: str
+    turns_count: int
+    compacted_turns: int
+    summary: str
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    last_activity_at: datetime | None = None
+
+
+class ToolPolicyIn(BaseModel):
+    tool_name: str = Field(min_length=2, max_length=80)
+    allow: bool
+    agent_code: str | None = Field(default=None, max_length=64)
+    config: dict = Field(default_factory=dict)
+
+
+class ModelPolicyIn(BaseModel):
+    preferred_provider: str | None = None
+    preferred_model: str | None = None
+    reasoning_effort: str | None = None
+    agent_code: str | None = Field(default=None, max_length=64)
+    metadata: dict = Field(default_factory=dict)
+
+
+class ToolRunIn(BaseModel):
+    tool_name: str = Field(min_length=2, max_length=80)
+    session_id: str | None = Field(default=None, min_length=1, max_length=128)
+    agent_code: str | None = Field(default=None, max_length=64)
+    args: dict = Field(default_factory=dict)
+
+
+def _sse_frame(event: str, payload: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(payload)}\n\n"
+
+
+@router.post("/v1/sessions", response_model=SessionOut)
+def create_or_resume_session(
+    payload: SessionCreateIn,
+    db: Session = Depends(get_db),
+    x_org_id: str | None = Header(default=None, alias="X-Org-Id"),
+) -> SessionOut:
+    org_id = x_org_id or "org_test"
+    try:
+        session_id = session_manager.ensure_session(org_id=org_id, agent_code=payload.agent_code, session_id=payload.session_id)
+    except RuntimeError as e:
+        raise HTTPException(status_code=429, detail=str(e)) from e
+    row = db.execute(
+        text(
+            """
+            select session_id, org_id, agent_code, status, turns_count, compacted_turns, summary, created_at, updated_at, last_activity_at
+            from chat_sessions
+            where session_id = :session_id and org_id = :org_id
+            limit 1;
+            """
+        ),
+        {"session_id": session_id, "org_id": org_id},
+    ).mappings().first()
+    return SessionOut(**dict(row or {}))
+
+
+@router.get("/v1/sessions", response_model=list[SessionOut])
+def list_sessions(
+    limit: int = 100,
+    x_org_id: str | None = Header(default=None, alias="X-Org-Id"),
+) -> list[SessionOut]:
+    org_id = x_org_id or "org_test"
+    rows = session_manager.list_sessions(org_id=org_id, limit=limit)
+    return [SessionOut(**row) for row in rows]
+
+
+@router.delete("/v1/sessions/{session_id}")
+def delete_session(
+    session_id: str,
+    x_org_id: str | None = Header(default=None, alias="X-Org-Id"),
+) -> dict:
+    org_id = x_org_id or "org_test"
+    deleted = session_manager.delete_session(org_id=org_id, session_id=session_id)
+    return {"ok": deleted, "session_id": session_id}
+
+
+@router.get("/v1/runtime/events")
+def list_runtime_events(
+    limit: int = 200,
+    session_id: str | None = None,
+    x_org_id: str | None = Header(default=None, alias="X-Org-Id"),
+) -> dict:
+    org_id = x_org_id or "org_test"
+    cap = max(1, min(int(limit), 1000))
+    with SessionLocal() as local_db:
+        if session_id:
+            rows = local_db.execute(
+                text(
+                    """
+                    select id, org_id, session_id, agent_code, event_type, payload, created_at
+                    from runtime_events
+                    where org_id = :org_id and session_id = :session_id
+                    order by created_at desc
+                    limit :limit;
+                    """
+                ),
+                {"org_id": org_id, "session_id": session_id, "limit": cap},
+            ).mappings().all()
+        else:
+            rows = local_db.execute(
+                text(
+                    """
+                    select id, org_id, session_id, agent_code, event_type, payload, created_at
+                    from runtime_events
+                    where org_id = :org_id
+                    order by created_at desc
+                    limit :limit;
+                    """
+                ),
+                {"org_id": org_id, "limit": cap},
+            ).mappings().all()
+    return {"items": [dict(r) for r in rows]}
+
+
+@router.get("/v1/tools")
+def list_tools() -> dict:
+    return {"tools": tool_registry.list_tools()}
+
+
+@router.post("/v1/tools/run")
+def run_tool(
+    payload: ToolRunIn,
+    x_org_id: str | None = Header(default=None, alias="X-Org-Id"),
+) -> dict:
+    org_id = x_org_id or "org_test"
+    result = tool_registry.run(
+        tool_name=payload.tool_name,
+        context=ToolCallContext(org_id=org_id, session_id=payload.session_id, agent_code=payload.agent_code),
+        args=payload.args,
+    )
+    return result
+
+
+@router.get("/v1/tool-policies")
+def list_tool_policies(
+    x_org_id: str | None = Header(default=None, alias="X-Org-Id"),
+) -> dict:
+    org_id = x_org_id or "org_test"
+    return {"items": tool_policy_service.list_policies(org_id=org_id)}
+
+
+@router.post("/v1/tool-policies")
+def upsert_tool_policy(
+    payload: ToolPolicyIn,
+    x_org_id: str | None = Header(default=None, alias="X-Org-Id"),
+) -> dict:
+    org_id = x_org_id or "org_test"
+    tool_policy_service.upsert_policy(
+        org_id=org_id,
+        tool_name=payload.tool_name,
+        allow=payload.allow,
+        agent_code=payload.agent_code,
+        config=payload.config,
+    )
+    return {"ok": True}
+
+
+@router.get("/v1/model-policies")
+def list_model_policies(
+    x_org_id: str | None = Header(default=None, alias="X-Org-Id"),
+) -> dict:
+    org_id = x_org_id or "org_test"
+    return {"items": model_policy_service.list_preferences(org_id=org_id)}
+
+
+@router.post("/v1/model-policies")
+def upsert_model_policy(
+    payload: ModelPolicyIn,
+    x_org_id: str | None = Header(default=None, alias="X-Org-Id"),
+) -> dict:
+    org_id = x_org_id or "org_test"
+    model_policy_service.upsert_preference(
+        org_id=org_id,
+        preferred_provider=payload.preferred_provider,
+        preferred_model=payload.preferred_model,
+        reasoning_effort=payload.reasoning_effort,
+        agent_code=payload.agent_code,
+        metadata=payload.metadata,
+    )
+    return {"ok": True}
+
+
+class WorkflowStepIn(BaseModel):
+    agent_code: str = Field(min_length=1, max_length=64)
+    message: str | None = None
+    use_previous_response: bool = True
+
+
+class WorkflowExecuteIn(BaseModel):
+    initial_message: str = Field(min_length=1, max_length=20000)
+    session_id: str | None = Field(default=None, min_length=1, max_length=128)
+    context: ExecuteContext = Field(default_factory=ExecuteContext)
+    steps: list[WorkflowStepIn] = Field(min_length=1)
+
+
+class WorkflowStepOut(BaseModel):
+    step_index: int
+    agent_code: str
+    input_message: str
+    response: str
+    model_used: str
+    latency_ms: int
+    trace_id: str
+
+
+class WorkflowExecuteOut(BaseModel):
+    workflow_id: str
+    session_id: str
+    final_response: str
+    steps: list[WorkflowStepOut]
+
+
+class WorkflowTemplateStep(BaseModel):
+    agent_code: str = Field(min_length=1, max_length=64)
+    message: str | None = None
+    use_previous_response: bool = True
+
+
+class WorkflowTemplateIn(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    description: str = Field(default="", max_length=1000)
+    context: ExecuteContext = Field(default_factory=ExecuteContext)
+    steps: list[WorkflowTemplateStep] = Field(min_length=1)
+    is_active: bool = True
+
+
+class WorkflowTemplateOut(BaseModel):
+    template_id: str
+    name: str
+    description: str
+    context: ExecuteContext
+    steps: list[WorkflowTemplateStep]
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class WorkflowTemplateRunIn(BaseModel):
+    initial_message: str = Field(min_length=1, max_length=20000)
+    session_id: str | None = Field(default=None, min_length=1, max_length=128)
+    context_override: ExecuteContext | None = None
+
+
+class WorkflowScheduleIn(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    cron_expression: str = Field(min_length=3, max_length=120)
+    timezone: str = Field(default="UTC", min_length=1, max_length=80)
+    initial_message: str = Field(min_length=1, max_length=20000)
+    is_active: bool = True
+
+
+class WorkflowScheduleOut(BaseModel):
+    schedule_id: str
+    template_id: str
+    template_name: str
+    name: str
+    cron_expression: str
+    timezone: str
+    initial_message: str
+    is_active: bool
+    last_run_at: datetime | None = None
+    next_run_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class WorkflowScheduledRunOut(BaseModel):
+    schedule_id: str
+    workflow: WorkflowExecuteOut
+    last_run_at: datetime
+    next_run_at: datetime | None = None
+
+
+class WorkflowDueRunItem(BaseModel):
+    schedule_id: str
+    workflow_id: str | None = None
+    status: str
+    error: str | None = None
+
+
+class WorkflowDueRunOut(BaseModel):
+    processed: int
+    items: list[WorkflowDueRunItem]
+
+
+def _validate_cron_expression(expr: str) -> bool:
+    value = (expr or "").strip()
+    if not value:
+        return False
+    if croniter:
+        try:
+            croniter(value, datetime.now(timezone.utc))
+            return True
+        except Exception:
+            return False
+    parts = value.split()
+    return len(parts) in {5, 6}
+
+
+def _merge_context(base: ExecuteContext, override: ExecuteContext | None) -> ExecuteContext:
+    if override is None:
+        return base
+    data = base.model_dump()
+    patch = override.model_dump(exclude_none=True)
+    data.update(patch)
+    return ExecuteContext(**data)
+
+
+@router.post("/v1/workflows/execute", response_model=WorkflowExecuteOut)
+def execute_workflow(
+    payload: WorkflowExecuteIn,
+    db: Session = Depends(get_db),
+    x_org_id: str | None = Header(default=None, alias="X-Org-Id"),
+) -> WorkflowExecuteOut:
+    from fastapi import HTTPException
+
+    org_id = x_org_id or "org_test"
+    max_steps = max(1, int(settings.workflow_max_steps))
+    if len(payload.steps) > max_steps:
+        raise HTTPException(status_code=400, detail=f"Too many steps. Max allowed: {max_steps}")
+
+    workflow_id = str(uuid.uuid4())
+    session_id = payload.session_id or f"wf-{workflow_id}"
+    current_message = payload.initial_message
+    outputs: list[WorkflowStepOut] = []
+
+    for idx, step in enumerate(payload.steps, start=1):
+        agent_code = step.agent_code.strip()
+        agent = db.execute(select(AgentCatalog).where(AgentCatalog.code == agent_code)).scalars().first()
+        if not agent:
+            raise HTTPException(status_code=404, detail=f"Agent not found in workflow step {idx}: {agent_code}")
+
+        hired = (
+            db.execute(
+                select(HiredAgent)
+                .where(HiredAgent.org_id == org_id)
+                .where(HiredAgent.agent_code == agent_code)
+                .where(HiredAgent.status == "active")
+            )
+            .scalars()
+            .first()
+        )
+        if not hired:
+            raise HTTPException(status_code=403, detail=f"Agent not hired for step {idx}: {agent_code}")
+
+        input_message = (step.message or "").strip()
+        if not input_message:
+            input_message = current_message
+        elif step.use_previous_response:
+            input_message = f"{input_message}\n\nPrevious step output:\n{current_message}"
+
+        system_prompt = (agent.system_prompt or "").strip() or system_prompt_for_agent(agent_code)
+        system_prompt = inject_domain_block(system_prompt, agent)
+
+        context_lines = _to_context_lines(payload.context)
+        memory_block = _session_memory_block(
+            db=db,
+            org_id=org_id,
+            agent_code=agent_code,
+            session_id=session_id,
+        )
+        if memory_block:
+            context_lines.append(memory_block)
+
+        if context_lines:
+            system_prompt = system_prompt + "\n\nClient Context:\n" + "\n".join(context_lines)
+
+        trace_id = str(uuid.uuid4())
+        try:
+            result = execute_via_litellm(
+                provider=agent.llm_provider or "",
+                model=agent.llm_model or "",
+                system=system_prompt,
+                user=input_message,
+                trace_id=trace_id,
+                enable_search=bool(payload.context.web_search),
+                enable_docs=bool(payload.context.doc_retrieval),
+                org_id=org_id,
+                session_id=session_id,
+                agent_code=agent_code,
+            )
+        except LLMError as e:
+            raise HTTPException(status_code=503, detail=f"Workflow step {idx} failed: {e}") from e
+
+        response_text = result.get("response") or result.get("content") or result.get("text") or ""
+        current_message = response_text
+
+        try:
+            db.execute(
+                text(
+                    """
+                    insert into interaction_logs
+                      (org_id, agent_code, session_id, message, response, model_used, latency_ms, tokens_used, quality_score, trace_id)
+                    values
+                      (:org_id, :agent_code, :session_id, :message, :response, :model_used, :latency_ms, :tokens_used, :quality_score, :trace_id);
+                    """
+                ),
+                {
+                    "org_id": org_id,
+                    "agent_code": agent_code,
+                    "session_id": session_id,
+                    "message": input_message,
+                    "response": response_text,
+                    "model_used": result.get("model_used") or "",
+                    "latency_ms": int(result.get("latency_ms") or 0),
+                    "tokens_used": int(result.get("tokens_used") or 0),
+                    "quality_score": 0.85,
+                    "trace_id": result.get("trace_id") or trace_id,
+                },
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
+
+        outputs.append(
+            WorkflowStepOut(
+                step_index=idx,
+                agent_code=agent_code,
+                input_message=input_message,
+                response=response_text,
+                model_used=result.get("model_used") or "",
+                latency_ms=int(result.get("latency_ms") or 0),
+                trace_id=result.get("trace_id") or trace_id,
+            )
+        )
+
+    return WorkflowExecuteOut(
+        workflow_id=workflow_id,
+        session_id=session_id,
+        final_response=current_message,
+        steps=outputs,
+    )
+
+
+@router.post("/v1/workflows/templates", response_model=WorkflowTemplateOut)
+def create_workflow_template(
+    payload: WorkflowTemplateIn,
+    db: Session = Depends(get_db),
+    x_org_id: str | None = Header(default=None, alias="X-Org-Id"),
+) -> WorkflowTemplateOut:
+    from fastapi import HTTPException
+
+    org_id = x_org_id or "org_test"
+    max_steps = max(1, int(settings.workflow_max_steps))
+    if len(payload.steps) > max_steps:
+        raise HTTPException(status_code=400, detail=f"Too many steps. Max allowed: {max_steps}")
+
+    db.execute(
+        text("insert into organizations (org_id, name) values (:org_id, :name) on conflict (org_id) do nothing"),
+        {"org_id": org_id, "name": ""},
+    )
+    try:
+        row = db.execute(
+            text(
+                """
+                insert into workflow_templates (org_id, name, description, context, steps, is_active)
+                values (:org_id, :name, :description, cast(:context as jsonb), cast(:steps as jsonb), :is_active)
+                returning template_id, name, description, context, steps, is_active, created_at, updated_at;
+                """
+            ),
+            {
+                "org_id": org_id,
+                "name": payload.name.strip(),
+                "description": payload.description.strip(),
+                "context": json.dumps(payload.context.model_dump()),
+                "steps": json.dumps([step.model_dump() for step in payload.steps]),
+                "is_active": payload.is_active,
+            },
+        ).mappings().first()
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Failed to save workflow template: {e}") from e
+
+    if not row:
+        raise HTTPException(status_code=500, detail="Failed to create workflow template")
+
+    return WorkflowTemplateOut(
+        template_id=str(row["template_id"]),
+        name=str(row["name"]),
+        description=str(row["description"] or ""),
+        context=ExecuteContext(**(row["context"] or {})),
+        steps=[WorkflowTemplateStep(**item) for item in (row["steps"] or [])],
+        is_active=bool(row["is_active"]),
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+@router.get("/v1/workflows/templates", response_model=list[WorkflowTemplateOut])
+def list_workflow_templates(
+    include_inactive: bool = False,
+    db: Session = Depends(get_db),
+    x_org_id: str | None = Header(default=None, alias="X-Org-Id"),
+) -> list[WorkflowTemplateOut]:
+    org_id = x_org_id or "org_test"
+    if include_inactive:
+        stmt = text(
+            """
+            select template_id, name, description, context, steps, is_active, created_at, updated_at
+            from workflow_templates
+            where org_id = :org_id
+            order by created_at desc;
+            """
+        )
+    else:
+        stmt = text(
+            """
+            select template_id, name, description, context, steps, is_active, created_at, updated_at
+            from workflow_templates
+            where org_id = :org_id and is_active = true
+            order by created_at desc;
+            """
+        )
+    rows = db.execute(stmt, {"org_id": org_id}).mappings().all()
+    out: list[WorkflowTemplateOut] = []
+    for row in rows:
+        out.append(
+            WorkflowTemplateOut(
+                template_id=str(row["template_id"]),
+                name=str(row["name"]),
+                description=str(row["description"] or ""),
+                context=ExecuteContext(**(row["context"] or {})),
+                steps=[WorkflowTemplateStep(**item) for item in (row["steps"] or [])],
+                is_active=bool(row["is_active"]),
+                created_at=row["created_at"],
+                updated_at=row["updated_at"],
+            )
+        )
+    return out
+
+
+@router.post("/v1/workflows/templates/{template_id}/run", response_model=WorkflowExecuteOut)
+def run_workflow_template(
+    template_id: str,
+    payload: WorkflowTemplateRunIn,
+    db: Session = Depends(get_db),
+    x_org_id: str | None = Header(default=None, alias="X-Org-Id"),
+) -> WorkflowExecuteOut:
+    from fastapi import HTTPException
+
+    org_id = x_org_id or "org_test"
+    template = db.execute(
+        text(
+            """
+            select template_id, name, context, steps, is_active
+            from workflow_templates
+            where org_id = :org_id and template_id = cast(:template_id as uuid)
+            limit 1;
+            """
+        ),
+        {"org_id": org_id, "template_id": template_id},
+    ).mappings().first()
+    if not template:
+        raise HTTPException(status_code=404, detail="Workflow template not found")
+    if not bool(template["is_active"]):
+        raise HTTPException(status_code=409, detail="Workflow template is inactive")
+
+    base_context = ExecuteContext(**(template["context"] or {}))
+    merged_context = _merge_context(base_context, payload.context_override)
+    steps = [WorkflowStepIn(**item) for item in (template["steps"] or [])]
+
+    run_input = WorkflowExecuteIn(
+        initial_message=payload.initial_message,
+        session_id=payload.session_id,
+        context=merged_context,
+        steps=steps,
+    )
+    try:
+        result = execute_workflow(payload=run_input, db=db, x_org_id=org_id)
+        db.execute(
+            text(
+                """
+                insert into workflow_runs
+                  (workflow_id, org_id, template_id, session_id, status, initial_message, final_response, steps_count, completed_at)
+                values
+                  (:workflow_id, :org_id, cast(:template_id as uuid), :session_id, 'completed', :initial_message, :final_response, :steps_count, now());
+                """
+            ),
+            {
+                "workflow_id": result.workflow_id,
+                "org_id": org_id,
+                "template_id": template_id,
+                "session_id": result.session_id,
+                "initial_message": payload.initial_message,
+                "final_response": result.final_response,
+                "steps_count": len(result.steps),
+            },
+        )
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Workflow template run failed: {e}") from e
+
+    return result
+
+
+@router.post("/v1/workflows/templates/{template_id}/schedules", response_model=WorkflowScheduleOut)
+def create_workflow_schedule(
+    template_id: str,
+    payload: WorkflowScheduleIn,
+    db: Session = Depends(get_db),
+    x_org_id: str | None = Header(default=None, alias="X-Org-Id"),
+) -> WorkflowScheduleOut:
+    from fastapi import HTTPException
+
+    org_id = x_org_id or "org_test"
+    if not _validate_cron_expression(payload.cron_expression):
+        raise HTTPException(status_code=400, detail="Invalid cron expression")
+
+    template_row = db.execute(
+        text(
+            """
+            select template_id, name, is_active
+            from workflow_templates
+            where org_id = :org_id and template_id = cast(:template_id as uuid)
+            limit 1;
+            """
+        ),
+        {"org_id": org_id, "template_id": template_id},
+    ).mappings().first()
+    if not template_row:
+        raise HTTPException(status_code=404, detail="Workflow template not found")
+    if not bool(template_row["is_active"]):
+        raise HTTPException(status_code=409, detail="Workflow template is inactive")
+
+    next_run = _next_run_at(payload.cron_expression, payload.timezone)
+    row = db.execute(
+        text(
+            """
+            insert into workflow_schedules
+              (org_id, template_id, name, cron_expression, initial_message, timezone, is_active, next_run_at)
+            values
+              (:org_id, cast(:template_id as uuid), :name, :cron_expression, :initial_message, :timezone, :is_active, :next_run_at)
+            returning schedule_id, template_id, name, cron_expression, initial_message, timezone, is_active, last_run_at, next_run_at, created_at, updated_at;
+            """
+        ),
+        {
+            "org_id": org_id,
+            "template_id": template_id,
+            "name": payload.name.strip(),
+            "cron_expression": payload.cron_expression.strip(),
+            "initial_message": payload.initial_message,
+            "timezone": payload.timezone.strip() or "UTC",
+            "is_active": payload.is_active,
+            "next_run_at": next_run,
+        },
+    ).mappings().first()
+    db.commit()
+
+    if not row:
+        raise HTTPException(status_code=500, detail="Failed to create schedule")
+
+    return WorkflowScheduleOut(
+        schedule_id=str(row["schedule_id"]),
+        template_id=str(row["template_id"]),
+        template_name=str(template_row["name"]),
+        name=str(row["name"]),
+        cron_expression=str(row["cron_expression"]),
+        timezone=str(row["timezone"]),
+        initial_message=str(row["initial_message"]),
+        is_active=bool(row["is_active"]),
+        last_run_at=row["last_run_at"],
+        next_run_at=row["next_run_at"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+@router.get("/v1/workflows/schedules", response_model=list[WorkflowScheduleOut])
+def list_workflow_schedules(
+    include_inactive: bool = False,
+    db: Session = Depends(get_db),
+    x_org_id: str | None = Header(default=None, alias="X-Org-Id"),
+) -> list[WorkflowScheduleOut]:
+    org_id = x_org_id or "org_test"
+    active_clause = "" if include_inactive else "and ws.is_active = true"
+    rows = db.execute(
+        text(
+            f"""
+            select
+              ws.schedule_id, ws.template_id, wt.name as template_name,
+              ws.name, ws.cron_expression, ws.initial_message, ws.timezone, ws.is_active,
+              ws.last_run_at, ws.next_run_at, ws.created_at, ws.updated_at
+            from workflow_schedules ws
+            join workflow_templates wt on wt.template_id = ws.template_id
+            where ws.org_id = :org_id {active_clause}
+            order by ws.created_at desc;
+            """
+        ),
+        {"org_id": org_id},
+    ).mappings().all()
+
+    return [
+        WorkflowScheduleOut(
+            schedule_id=str(row["schedule_id"]),
+            template_id=str(row["template_id"]),
+            template_name=str(row["template_name"]),
+            name=str(row["name"]),
+            cron_expression=str(row["cron_expression"]),
+            timezone=str(row["timezone"]),
+            initial_message=str(row["initial_message"]),
+            is_active=bool(row["is_active"]),
+            last_run_at=row["last_run_at"],
+            next_run_at=row["next_run_at"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+        for row in rows
+    ]
+
+
+@router.post("/v1/workflows/schedules/{schedule_id}/run", response_model=WorkflowScheduledRunOut)
+def run_workflow_schedule(
+    schedule_id: str,
+    db: Session = Depends(get_db),
+    x_org_id: str | None = Header(default=None, alias="X-Org-Id"),
+) -> WorkflowScheduledRunOut:
+    from fastapi import HTTPException
+
+    org_id = x_org_id or "org_test"
+    row = db.execute(
+        text(
+            """
+            select
+              ws.schedule_id, ws.template_id, ws.name, ws.cron_expression, ws.initial_message, ws.timezone, ws.is_active,
+              wt.context, wt.steps, wt.is_active as template_active
+            from workflow_schedules ws
+            join workflow_templates wt on wt.template_id = ws.template_id
+            where ws.org_id = :org_id and ws.schedule_id = cast(:schedule_id as uuid)
+            limit 1;
+            """
+        ),
+        {"org_id": org_id, "schedule_id": schedule_id},
+    ).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Workflow schedule not found")
+    if not bool(row["is_active"]):
+        raise HTTPException(status_code=409, detail="Workflow schedule is inactive")
+    if not bool(row["template_active"]):
+        raise HTTPException(status_code=409, detail="Workflow template is inactive")
+
+    run_input = WorkflowExecuteIn(
+        initial_message=str(row["initial_message"]),
+        session_id=None,
+        context=ExecuteContext(**(row["context"] or {})),
+        steps=[WorkflowStepIn(**item) for item in (row["steps"] or [])],
+    )
+    result = execute_workflow(payload=run_input, db=db, x_org_id=org_id)
+
+    last_run = datetime.now(timezone.utc)
+    next_run = _next_run_at(str(row["cron_expression"]), str(row["timezone"]))
+    db.execute(
+        text(
+            """
+            update workflow_schedules
+            set last_run_at = :last_run_at,
+                next_run_at = :next_run_at,
+                updated_at = now()
+            where schedule_id = cast(:schedule_id as uuid);
+            """
+        ),
+        {"schedule_id": schedule_id, "last_run_at": last_run, "next_run_at": next_run},
+    )
+    db.execute(
+        text(
+            """
+            insert into workflow_runs
+              (workflow_id, org_id, template_id, schedule_id, session_id, status, initial_message, final_response, steps_count, completed_at)
+            values
+              (:workflow_id, :org_id, cast(:template_id as uuid), cast(:schedule_id as uuid), :session_id, 'completed', :initial_message, :final_response, :steps_count, now());
+            """
+        ),
+        {
+            "workflow_id": result.workflow_id,
+            "org_id": org_id,
+            "template_id": str(row["template_id"]),
+            "schedule_id": schedule_id,
+            "session_id": result.session_id,
+            "initial_message": str(row["initial_message"]),
+            "final_response": result.final_response,
+            "steps_count": len(result.steps),
+        },
+    )
+    db.commit()
+
+    return WorkflowScheduledRunOut(
+        schedule_id=schedule_id,
+        workflow=result,
+        last_run_at=last_run,
+        next_run_at=next_run,
+    )
+
+
+@router.post("/v1/workflows/schedules/run-due", response_model=WorkflowDueRunOut)
+def run_due_workflow_schedules(
+    limit: int = 10,
+    db: Session = Depends(get_db),
+    x_org_id: str | None = Header(default=None, alias="X-Org-Id"),
+) -> WorkflowDueRunOut:
+    from fastapi import HTTPException
+
+    org_id = x_org_id or "org_test"
+    capped_limit = max(1, min(50, int(limit)))
+    now = datetime.now(timezone.utc)
+    due = db.execute(
+        text(
+            """
+            select schedule_id
+            from workflow_schedules
+            where org_id = :org_id
+              and is_active = true
+              and next_run_at is not null
+              and next_run_at <= :now
+            order by next_run_at asc
+            limit :limit;
+            """
+        ),
+        {"org_id": org_id, "now": now, "limit": capped_limit},
+    ).mappings().all()
+
+    items: list[WorkflowDueRunItem] = []
+    for row in due:
+        schedule_id = str(row["schedule_id"])
+        try:
+            out = run_workflow_schedule(schedule_id=schedule_id, db=db, x_org_id=org_id)
+            items.append(WorkflowDueRunItem(schedule_id=schedule_id, workflow_id=out.workflow.workflow_id, status="completed"))
+        except HTTPException as e:
+            items.append(WorkflowDueRunItem(schedule_id=schedule_id, status="failed", error=str(e.detail)))
+        except Exception as e:
+            items.append(WorkflowDueRunItem(schedule_id=schedule_id, status="failed", error=str(e)))
+
+    return WorkflowDueRunOut(processed=len(items), items=items)
 
 
 @router.get("/v1/organizations/{org_id}/agents/{agent_code}/stats")

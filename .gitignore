@@ -10,3 +10,6 @@ frontend/.env.local
 *.out
 *.err
 *.pid
+
+# Local third-party reference repos (do not ship with product repo)
+copilot-sdk-main/

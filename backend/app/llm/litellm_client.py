@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from typing import Any
 
+from app.llm.search_detector import search_detector
+from app.runtime.model_policy import model_policy_service
+from app.runtime.tool_registry import ToolCallContext, tool_registry
 from app.settings import settings
+
+logger = logging.getLogger(__name__)
 
 
 class LLMError(RuntimeError):
@@ -65,8 +71,84 @@ def execute_via_litellm(
     system: str,
     user: str,
     trace_id: str | None = None,
+    enable_search: bool = True,
+    enable_docs: bool = True,
+    org_id: str | None = None,
+    session_id: str | None = None,
+    agent_code: str | None = None,
 ) -> dict[str, Any]:
     trace_id = trace_id or str(uuid.uuid4())
+    search_used = False
+    docs_used = False
+    user_message = user
+    additional_blocks: list[str] = []
+
+    runtime_context = ToolCallContext(
+        org_id=(org_id or "org_test"),
+        session_id=session_id,
+        agent_code=agent_code,
+    )
+
+    if enable_search and settings.enable_web_search:
+        try:
+            if search_detector.needs_search(user):
+                query = search_detector.extract_search_query(user)
+                call = tool_registry.run(
+                    tool_name="web_search",
+                    context=runtime_context,
+                    args={"query": query, "num_results": 5},
+                )
+                if call.get("ok"):
+                    formatted = (((call.get("data") or {}).get("formatted")) or "").strip()
+                    if formatted:
+                        additional_blocks.append(
+                            "[CURRENT WEB INFORMATION]\n"
+                            f"Search query: {query}\n"
+                            f"{formatted}\n"
+                            "[END WEB INFORMATION]"
+                        )
+                        search_used = True
+        except Exception as e:
+            logger.error("Web search integration failed: %s", e)
+
+    if enable_docs and settings.enable_document_retrieval:
+        try:
+            from app.tools.document_search import doc_search
+
+            if doc_search.needs_docs(user):
+                call = tool_registry.run(
+                    tool_name="document_search",
+                    context=runtime_context,
+                    args={"query": user, "limit": 3},
+                )
+                if call.get("ok"):
+                    formatted_docs = (((call.get("data") or {}).get("formatted")) or "").strip()
+                    if formatted_docs and "No relevant internal documents found." not in formatted_docs:
+                        additional_blocks.append(
+                            "[COMPANY KNOWLEDGE BASE]\n"
+                            f"{formatted_docs}\n"
+                            "[END KNOWLEDGE BASE]"
+                        )
+                        docs_used = True
+        except Exception as e:
+            logger.error("Document retrieval integration failed: %s", e)
+
+    if additional_blocks:
+        user_message = (
+            f"{user}\n\n" + "\n\n".join(additional_blocks) + "\n\n"
+            "Use available context blocks above to provide accurate answers. "
+            "If context is missing, clearly state assumptions."
+        )
+
+    if org_id:
+        preference = model_policy_service.get_preference(org_id=org_id, agent_code=agent_code)
+        if preference:
+            pref_provider = (preference.get("preferred_provider") or "").strip()
+            pref_model = (preference.get("preferred_model") or "").strip()
+            if pref_provider:
+                provider = pref_provider
+            if pref_model:
+                model = pref_model
 
     # Smart multi-LLM routing path (with cache + cost tracking).
     if getattr(settings, "multi_llm_router_enabled", False):
@@ -76,7 +158,7 @@ def execute_via_litellm(
             routed = get_multi_llm_router().execute(
                 LLMRequest(
                     system=system,
-                    user=user,
+                    user=user_message,
                     trace_id=trace_id,
                     preferred_provider=(provider or None),
                     preferred_model=(model or None),
@@ -92,6 +174,8 @@ def execute_via_litellm(
                 "cached": bool(routed.get("cached")),
                 "route_level": routed.get("route_level"),
                 "complexity_score": routed.get("complexity_score"),
+                "search_used": search_used,
+                "docs_used": docs_used,
             }
         except Exception as e:
             # If request relies entirely on router (no explicit provider/model), surface router failure directly.
@@ -112,6 +196,8 @@ def execute_via_litellm(
             "latency_ms": latency_ms,
             "response": reply,
             "tokens_used": max(1, len(user.split()) * 2),
+            "search_used": search_used,
+            "docs_used": docs_used,
         }
 
     try:
@@ -129,7 +215,7 @@ def execute_via_litellm(
                 model=model_used,
                 messages=[
                     {"role": "system", "content": system},
-                    {"role": "user", "content": user},
+                    {"role": "user", "content": user_message},
                 ],
                 metadata={"trace_id": trace_id},
                 timeout=max(5, int(settings.litellm_timeout_s)),
@@ -208,4 +294,15 @@ def execute_via_litellm(
         "response": text,
         "tokens_used": int((data.get("usage") or {}).get("total_tokens") or 0),
         "raw": data,
+        "search_used": search_used,
+        "docs_used": docs_used,
     }
+    if org_id:
+        preference = model_policy_service.get_preference(org_id=org_id, agent_code=agent_code)
+        if preference:
+            pref_provider = (preference.get("preferred_provider") or "").strip()
+            pref_model = (preference.get("preferred_model") or "").strip()
+            if pref_provider:
+                provider = pref_provider
+            if pref_model:
+                model = pref_model

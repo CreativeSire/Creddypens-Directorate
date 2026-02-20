@@ -1,0 +1,7 @@
+agent_code,human_name,before_score,after_score,delta,conversations,high_scores,low_scores,session_id
+Author-01,Isabella,90.96400000000001,91.0,0.04,1,1,0,792cc936-8848-4ddc-b80f-7ea0a39aa9d7
+DATA-02,Paul,91.0,92.0,1.0,1,1,0,870f381e-575f-493c-8e10-8492e9628f47
+ONBOARD-01,Rachel,90.988,91.7,0.71,1,1,0,7d97b644-bf24-4e34-bd4d-933e3868f973
+DEVOPS-01,Charles,90.64,89.5,-1.14,1,1,0,99cf36f2-8093-4e0a-9132-d8417c459838
+QUALIFIER-01,Sarah,85.66,91.0,5.34,1,1,0,03d8d6ee-71e4-4338-b875-250f072031a4
+SOCIAL-01,Nathan,90.1,91.0,0.9,1,1,0,a1051f96-3f0c-48cb-a3cd-4025b6963134

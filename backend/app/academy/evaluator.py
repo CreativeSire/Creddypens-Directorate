@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from typing import Any
 
 import anyio
 
 from app.llm.litellm_client import LLMError, execute_via_litellm
+from app.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -59,9 +59,10 @@ class ResponseEvaluator:
     }
 
     def __init__(self) -> None:
-        # Default judge model: Claude Sonnet 4.5 (as requested).
-        self.provider = os.getenv("ACADEMY_JUDGE_PROVIDER", "anthropic").strip() or "anthropic"
-        self.model = os.getenv("ACADEMY_JUDGE_MODEL", "claude-sonnet-4-5-20250929").strip() or "claude-sonnet-4-5-20250929"
+        # Route judge calls through the multi-LLM router and default to free Groq.
+        # Can be overridden via env vars.
+        self.provider = (settings.academy_judge_provider or "groq").strip()
+        self.model = (settings.academy_judge_model or "llama-3.3-70b-versatile").strip()
 
     def evaluate_sync(
         self,

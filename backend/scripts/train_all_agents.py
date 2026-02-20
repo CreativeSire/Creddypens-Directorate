@@ -18,7 +18,7 @@ async def main() -> None:
     parser = argparse.ArgumentParser(description="Train all active agents with synthetic conversations.")
     parser.add_argument("--conversations", type=int, default=100, help="Conversations per agent (default: 100)")
     parser.add_argument("--batch-size", type=int, default=5, help="Agents per batch (default: 5)")
-    parser.add_argument("--wait", type=int, default=30, help="Seconds to wait between batches (default: 30)")
+    parser.add_argument("--wait", type=int, default=60, help="Seconds to wait between batches (default: 60)")
     args = parser.parse_args()
 
     trainer = BatchTrainer()
