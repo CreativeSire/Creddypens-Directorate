@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.agents.prompts import inject_domain_block, system_prompt_for_agent
 from app.integrations.email import email_integration
 from app.integrations.slack import slack_integration
+from app.integrations.webhook import webhook_integration
 from app.llm.litellm_client import LLMError, execute_via_litellm
 from app.models import AgentCatalog, HiredAgent
 from app.schemas_execute import ExecuteContext
@@ -168,7 +169,7 @@ class WorkflowEngine:
                 input_message = str(variables.get("previous_response") or initial_message)
 
             trace_id = str(uuid.uuid4())
-            if action in {"slack", "email"}:
+            if action in {"slack", "email", "webhook"}:
                 response_text = self._execute_integration_action(
                     action=action,
                     integration_id=integration_id,
@@ -317,5 +318,16 @@ class WorkflowEngine:
                 use_tls=bool(config.get("use_tls", True)),
             )
             return f"Email sent to {to_email}"
+
+        if action == "webhook":
+            if integration_type != "webhook":
+                raise HTTPException(status_code=400, detail=f"Integration {integration_id} is not webhook")
+            url = str(config.get("url") or "")
+            headers = dict(config.get("headers") or {})
+            body = action_config.get("payload")
+            if not isinstance(body, dict):
+                body = {"message": input_message}
+            webhook_integration.send_webhook(url=url, payload=body, headers={str(k): str(v) for k, v in headers.items()})
+            return f"Webhook posted to {url}"
 
         raise HTTPException(status_code=400, detail=f"Unsupported workflow action: {action}")

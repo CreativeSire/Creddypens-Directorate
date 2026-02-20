@@ -99,6 +99,18 @@ CreddyPens is an AI workforce platform where organizations hire role-based AI ag
 ## 5) Latest major completed milestones
 
 ## 2026-02-20
+- Week 2 Day 13-14 completion (generic webhooks):
+  - Added webhook integration service with retry + exponential backoff:
+    - `backend/app/integrations/webhook.py`
+  - Added direct webhook test endpoint:
+    - `POST /v1/webhooks/test`
+  - Added webhook integration test path on stored integrations:
+    - `POST /v1/integrations/{integration_id}/test` now supports `integration_type=webhook`
+  - Added workflow webhook action support:
+    - Workflow steps can now use `action=webhook` + `integration_id` + `action_config.payload`
+  - Added webhook config UI in settings:
+    - `frontend/src/components/settings/integrations.tsx`
+
 - Week 2 Day 11-12 completion (Slack + Email integrations):
   - Added `integration_configs` table in `backend/app/schema.py`.
   - Added integration service modules:

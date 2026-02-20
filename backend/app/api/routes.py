@@ -17,6 +17,7 @@ from app.agents.prompts import inject_domain_block, system_prompt_for_agent
 from app.db import SessionLocal, get_db
 from app.integrations.email import email_integration
 from app.integrations.slack import slack_integration
+from app.integrations.webhook import webhook_integration
 from app.llm.litellm_client import LLMError, execute_via_litellm
 from app.memory.extractor import memory_extractor
 from app.llm.multi_router import get_multi_llm_router
@@ -1458,6 +1459,12 @@ class IntegrationTestIn(BaseModel):
     payload: dict = Field(default_factory=dict)
 
 
+class WebhookTestIn(BaseModel):
+    url: str = Field(min_length=8, max_length=2000)
+    payload: dict = Field(default_factory=dict)
+    headers: dict = Field(default_factory=dict)
+
+
 def _sse_frame(event: str, payload: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(payload)}\n\n"
 
@@ -1725,7 +1732,27 @@ async def test_integration(integration_id: str, payload: IntegrationTestIn, db: 
         )
         return {"ok": True, "integration_type": "email", "result": result}
 
+    if integration_type == "webhook":
+        url = str(config.get("url") or "")
+        merged_headers = dict(config.get("headers") or {})
+        merged_headers.update({str(k): str(v) for k, v in payload.payload.get("headers", {}).items()} if isinstance(payload.payload.get("headers"), dict) else {})
+        body = payload.payload.get("payload")
+        if not isinstance(body, dict):
+            body = {"message": "CreddyPens integration test"}
+        result = webhook_integration.send_webhook(url=url, payload=body, headers=merged_headers)
+        return {"ok": True, "integration_type": "webhook", "result": result}
+
     raise HTTPException(status_code=400, detail=f"Unsupported integration_type: {integration_type}")
+
+
+@router.post("/v1/webhooks/test")
+def test_webhook(payload: WebhookTestIn) -> dict:
+    result = webhook_integration.send_webhook(
+        url=payload.url,
+        payload=payload.payload,
+        headers={str(key): str(value) for key, value in payload.headers.items()},
+    )
+    return {"ok": True, "result": result}
 
 
 class WorkflowStepIn(BaseModel):

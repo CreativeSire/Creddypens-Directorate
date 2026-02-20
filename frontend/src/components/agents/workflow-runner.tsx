@@ -19,7 +19,7 @@ type WorkflowStepLocal = {
   next_true: string;
   next_false: string;
   set_var: string;
-  action: "" | "slack" | "email";
+  action: "" | "slack" | "email" | "webhook";
   integration_id: string;
   action_payload: string;
 };
@@ -474,6 +474,7 @@ export function WorkflowRunner({ orgId, agents }: WorkflowRunnerProps) {
                 <option value="">Action: LLM</option>
                 <option value="slack">Action: Slack</option>
                 <option value="email">Action: Email</option>
+                <option value="webhook">Action: Webhook</option>
               </select>
               <input
                 value={step.integration_id}

@@ -29,6 +29,10 @@ export function IntegrationsManager({ orgId }: Props) {
     from_email: "",
     test_recipient: "",
   });
+  const [webhookConfig, setWebhookConfig] = useState({
+    url: "",
+    headers_json: "{}",
+  });
 
   const load = useCallback(async () => {
     try {
@@ -96,6 +100,28 @@ export function IntegrationsManager({ orgId }: Props) {
     }
   };
 
+  const addWebhook = async () => {
+    try {
+      const parsedHeaders = webhookConfig.headers_json.trim() ? JSON.parse(webhookConfig.headers_json) : {};
+      const response = await fetch(`${apiBaseUrl()}/v1/organizations/${encodeURIComponent(orgId)}/integrations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          integration_type: "webhook",
+          config: {
+            url: webhookConfig.url,
+            headers: parsedHeaders,
+          },
+        }),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      setWebhookConfig({ url: "", headers_json: "{}" });
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to add Webhook integration");
+    }
+  };
+
   const testIntegration = async (item: IntegrationItem) => {
     try {
       const payload =
@@ -150,6 +176,25 @@ export function IntegrationsManager({ orgId }: Props) {
         </div>
         <button onClick={() => void addEmail()} className="px-4 py-2 bg-[#FFB800] text-[#0A0F14] text-xs font-bold tracking-[0.2em]">
           ADD EMAIL
+        </button>
+      </div>
+
+      <div className="border border-[#00F0FF]/30 bg-[#00F0FF]/5 p-5 space-y-3">
+        <div className="text-xs text-[#FFB800] tracking-[0.25em]">INTEGRATIONS • WEBHOOK</div>
+        <input
+          value={webhookConfig.url}
+          onChange={(event) => setWebhookConfig((prev) => ({ ...prev, url: event.target.value }))}
+          placeholder="Webhook URL"
+          className="w-full bg-[#0A0F14] border border-[#00F0FF]/30 px-3 py-2 text-[#00F0FF] text-sm"
+        />
+        <input
+          value={webhookConfig.headers_json}
+          onChange={(event) => setWebhookConfig((prev) => ({ ...prev, headers_json: event.target.value }))}
+          placeholder='Headers JSON (e.g. {"Authorization":"Bearer ..."} )'
+          className="w-full bg-[#0A0F14] border border-[#00F0FF]/30 px-3 py-2 text-[#00F0FF] text-sm"
+        />
+        <button onClick={() => void addWebhook()} className="px-4 py-2 bg-[#FFB800] text-[#0A0F14] text-xs font-bold tracking-[0.2em]">
+          ADD WEBHOOK
         </button>
       </div>
 
