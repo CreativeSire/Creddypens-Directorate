@@ -59,6 +59,10 @@ class Settings(BaseSettings):
     session_max_parallel_per_org: int = Field(default=50, validation_alias="SESSION_MAX_PARALLEL_PER_ORG")
     upload_dir: str = Field(default="uploads", validation_alias="UPLOAD_DIR")
     upload_max_size_mb: int = Field(default=10, validation_alias="UPLOAD_MAX_SIZE_MB")
+    environment: str = Field(default="development", validation_alias="ENVIRONMENT")
+    rate_limit_enabled: bool = Field(default=True, validation_alias="RATE_LIMIT_ENABLED")
+    execute_rate_limit_per_minute: int = Field(default=20, validation_alias="EXECUTE_RATE_LIMIT_PER_MINUTE")
+    default_rate_limit_per_minute: int = Field(default=200, validation_alias="DEFAULT_RATE_LIMIT_PER_MINUTE")
 
 
 settings = Settings()

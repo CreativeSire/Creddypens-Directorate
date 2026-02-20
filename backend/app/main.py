@@ -7,6 +7,8 @@ from app.api.routes import router
 from app.api.academy import router as academy_router
 from app.api.files import router as files_router
 from app.db import engine
+from app.middleware.error_handler import register_error_handlers
+from app.middleware.rate_limit import RateLimitMiddleware
 from app.schema import ensure_schema
 from app.settings import settings
 
@@ -15,8 +17,14 @@ app = FastAPI(title="CreddyPens API", version="0.1.0")
 if settings.sentry_dsn:
     try:
         import sentry_sdk
+        from sentry_sdk.integrations.fastapi import FastApiIntegration
 
-        sentry_sdk.init(dsn=settings.sentry_dsn, traces_sample_rate=0.1)
+        sentry_sdk.init(
+            dsn=settings.sentry_dsn,
+            traces_sample_rate=0.1,
+            environment=settings.environment,
+            integrations=[FastApiIntegration()],
+        )
     except Exception:
         pass
 
@@ -28,6 +36,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(
+    RateLimitMiddleware,
+    enabled=settings.rate_limit_enabled,
+    execute_limit_per_minute=settings.execute_rate_limit_per_minute,
+    default_limit_per_minute=settings.default_rate_limit_per_minute,
+)
+register_error_handlers(app)
 
 app.include_router(router)
 app.include_router(academy_router)

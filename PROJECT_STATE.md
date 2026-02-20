@@ -90,7 +90,7 @@ CreddyPens is an AI workforce platform where organizations hire role-based AI ag
 - Not fully complete yet:
   - Long-term conversational memory injection per session
   - Rich external tool execution layer (web/files/third-party actions) in production path
-  - Fully automated production observability and alerting hardening
+  - Advanced observability automation (alert routing, SLO dashboards, on-call runbooks)
   - Frontend referral card UI (SuggestedAgent payload returned but not yet rendered)
   - One-shot purchase flow for referred agents not yet hired
 
@@ -99,6 +99,27 @@ CreddyPens is an AI workforce platform where organizations hire role-based AI ag
 ## 5) Latest major completed milestones
 
 ## 2026-02-20
+- Week 3 Day 18-19 completion (production hardening baseline):
+  - Added global API error handling middleware:
+    - `backend/app/middleware/error_handler.py`
+    - structured 500s now include `error_id` for support correlation.
+  - Added API rate limiting middleware with org/IP scoping:
+    - `backend/app/middleware/rate_limit.py`
+    - execute endpoints now enforce 20 requests/minute (configurable).
+  - Hardened app boot wiring in `backend/app/main.py`:
+    - Sentry FastAPI integration enabled when `SENTRY_DSN` is set.
+    - runtime environment tagging via `ENVIRONMENT`.
+    - global handlers + rate limiter registered for all routes.
+  - Added environment controls in `backend/app/settings.py` and `backend/.env.example`:
+    - `ENVIRONMENT`
+    - `RATE_LIMIT_ENABLED`
+    - `EXECUTE_RATE_LIMIT_PER_MINUTE`
+    - `DEFAULT_RATE_LIMIT_PER_MINUTE`
+  - Validation executed:
+    - `python -m compileall backend/app backend/scripts -q` (pass)
+    - `python -c "from app.main import app"` import check (pass)
+    - `npm run -s lint` in frontend (pass)
+
 - Week 3 Day 15-17 completion (org-wide task inbox):
   - Added `task_inbox` table + indexes in `backend/app/schema.py`.
   - Added task inbox API endpoints:
