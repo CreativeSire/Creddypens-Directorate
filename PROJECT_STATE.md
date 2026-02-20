@@ -119,6 +119,13 @@ CreddyPens is an AI workforce platform where organizations hire role-based AI ag
     - `python -m compileall backend/app backend/scripts -q` (pass)
     - `python -c "from app.main import app"` import check (pass)
     - `npm run -s lint` in frontend (pass)
+  - Day 20-21 test automation additions:
+    - Added comprehensive smoke script: `backend/scripts/smoke_test_complete.py`
+      - Covers health, agent catalog, router stats, memory CRUD, file endpoints, workflow validation, execute path.
+    - Added load test scenario: `backend/scripts/load_test.py` (Locust user model).
+    - Validation status:
+      - Script compile checks pass.
+      - Runtime smoke pass is currently blocked by local API timeouts on `localhost:8010`; needs a stable backend process + DB before final pass/fail signoff.
 
 - Week 3 Day 15-17 completion (org-wide task inbox):
   - Added `task_inbox` table + indexes in `backend/app/schema.py`.
