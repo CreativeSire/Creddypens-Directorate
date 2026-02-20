@@ -99,6 +99,35 @@ CreddyPens is an AI workforce platform where organizations hire role-based AI ag
 ## 5) Latest major completed milestones
 
 ## 2026-02-20
+- Week 4 Day 25-26 completed (enhanced analytics):
+  - Added backend analytics query layer:
+    - `backend/app/analytics/queries.py`
+    - overview KPIs, department cost estimates, activity timeseries.
+  - Added analytics API endpoints:
+    - `GET /v1/organizations/{org_id}/analytics/overview`
+    - `GET /v1/organizations/{org_id}/analytics/costs`
+    - `GET /v1/organizations/{org_id}/analytics/activity`
+  - Added frontend analytics page and navigation:
+    - `frontend/src/app/dashboard/analytics/page.tsx`
+    - `frontend/src/components/analytics/dashboard.tsx`
+    - linked from sidebar + mobile nav.
+  - Validation:
+    - backend compile pass
+    - frontend lint pass
+    - live endpoint checks returned 200 + data.
+
+- Week 4 Day 27-28 prep completed (cutover tooling/docs):
+  - Added predeploy env validation script:
+    - `backend/scripts/predeploy_check.py`
+  - Added staging/production smoke script with analytics + export checks:
+    - `backend/scripts/smoke_test_staging.py`
+  - Added frontend env template:
+    - `frontend/.env.example`
+  - Added production cutover runbook:
+    - `PRODUCTION_CUTOVER_RUNBOOK.md`
+  - Updated deploy checklist with analytics + smoke-test-staging steps:
+    - `DEPLOY_READY_CHECKLIST.md`
+
 - Week 3 Day 18-19 completion (production hardening baseline):
   - Added global API error handling middleware:
     - `backend/app/middleware/error_handler.py`
