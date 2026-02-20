@@ -127,6 +127,8 @@ CreddyPens is an AI workforce platform where organizations hire role-based AI ag
     - `PRODUCTION_CUTOVER_RUNBOOK.md`
   - Updated deploy checklist with analytics + smoke-test-staging steps:
     - `DEPLOY_READY_CHECKLIST.md`
+  - Landing page refactor pass finalized:
+    - `frontend/src/components/landing.tsx` cleaned up and aligned to current UX/content structure.
 
 - Week 3 Day 18-19 completion (production hardening baseline):
   - Added global API error handling middleware:
