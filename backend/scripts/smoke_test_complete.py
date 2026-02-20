@@ -50,8 +50,13 @@ def check_router_stats() -> CheckResult:
 
 
 def check_execute(agent_code: str) -> CheckResult:
+    hire_response = _request("POST", f"/v1/agents/{agent_code}/hire")
+    if hire_response.status_code not in {200, 201}:
+        return CheckResult("agent_execute", False, f"hire_status={hire_response.status_code}")
+
     payload = {
         "org_id": ORG_ID,
+        "session_id": "smoke-session",
         "message": "Give me a short greeting and one sentence on how you can help.",
         "context": {"web_search": False, "doc_retrieval": False},
     }
@@ -70,7 +75,9 @@ def check_memory_crud() -> CheckResult:
     create = _request("POST", f"/v1/organizations/{ORG_ID}/memories", json=create_payload)
     if create.status_code != 200:
         return CheckResult("memory_crud", False, f"create_status={create.status_code}")
-    memory_id = create.json().get("id")
+    memory_id = create.json().get("memory_id")
+    if not memory_id:
+        return CheckResult("memory_crud", False, "create_response_missing_memory_id")
     update = _request("PUT", f"/v1/memories/{memory_id}", json={"memory_value": "formal concise"})
     list_response = _request("GET", f"/v1/organizations/{ORG_ID}/memories")
     delete_response = _request("DELETE", f"/v1/memories/{memory_id}")
@@ -90,10 +97,13 @@ def check_file_endpoints() -> CheckResult:
 
 def check_workflow_validate() -> CheckResult:
     payload = {
-        "steps": [
-            {"id": "step1", "agent_code": "GREETER-01", "message": "Draft welcome", "use_previous_response": False},
-            {"id": "step2", "agent_code": "GREETER-01", "message": "Improve clarity", "use_previous_response": True},
-        ]
+        "workflow_definition": {
+            "start_step_id": "step1",
+            "steps": [
+                {"id": "step1", "agent_code": "GREETER-01", "input": "Draft welcome", "next": "step2"},
+                {"id": "step2", "agent_code": "GREETER-01", "input": "Improve clarity"},
+            ],
+        }
     }
     response = _request("POST", "/v1/workflows/validate", json=payload)
     ok = response.status_code == 200
@@ -124,7 +134,8 @@ def run() -> int:
     checks.append(_safe("file_list_endpoint", check_file_endpoints))
     checks.append(_safe("workflow_validate", check_workflow_validate))
     if agents:
-        checks.append(_safe("agent_execute", lambda: check_execute(agents[0].get("agent_code", "GREETER-01"))))
+        selected_agent = agents[0].get("agent_code") or agents[0].get("code") or "GREETER-01"
+        checks.append(_safe("agent_execute", lambda: check_execute(selected_agent)))
     else:
         checks.append(CheckResult("agent_execute", False, "skipped: no agents available"))
 
