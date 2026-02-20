@@ -8,7 +8,7 @@ import requests
 import uuid
 
 from fastapi import APIRouter, Depends, Header, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func as sqlfunc, select, text
 from sqlalchemy.orm import Session
@@ -22,6 +22,9 @@ from app.llm.litellm_client import LLMError, execute_via_litellm
 from app.memory.extractor import memory_extractor
 from app.llm.multi_router import get_multi_llm_router
 from app.models import AgentCatalog, HiredAgent
+from app.outputs.csv_formatter import csv_formatter
+from app.outputs.email_formatter import email_formatter
+from app.outputs.pdf_generator import pdf_generator
 from app.runtime.hooks import RuntimeEvent, hook_bus
 from app.runtime.model_policy import model_policy_service
 from app.runtime.session_manager import session_manager
@@ -1502,6 +1505,85 @@ class TaskAssignIn(BaseModel):
 
 def _sse_frame(event: str, payload: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(payload)}\n\n"
+
+
+def _get_interaction_export_row(db: Session, interaction_id: str, org_id: str) -> dict | None:
+    row = db.execute(
+        text(
+            """
+            select
+              il.interaction_id,
+              il.response as agent_response,
+              il.agent_code,
+              ac.human_name,
+              ac.name as role
+            from interaction_logs il
+            left join agent_catalog ac on ac.code = il.agent_code
+            where il.interaction_id = cast(:interaction_id as uuid)
+              and il.org_id = :org_id
+            limit 1;
+            """
+        ),
+        {"interaction_id": interaction_id, "org_id": org_id},
+    ).mappings().first()
+    return dict(row) if row else None
+
+
+@router.get("/v1/interactions/{interaction_id}/pdf")
+def export_interaction_as_pdf(
+    interaction_id: str,
+    db: Session = Depends(get_db),
+    x_org_id: str | None = Header(default=None, alias="X-Org-Id"),
+):
+    org_id = x_org_id or "org_test"
+    row = _get_interaction_export_row(db, interaction_id, org_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Interaction not found")
+
+    title = f"Response from {row.get('human_name') or row.get('agent_code')} ({row.get('role') or 'Agent'})"
+    try:
+        pdf_bytes = pdf_generator.generate_from_text(text=str(row.get("agent_response") or ""), title=title)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={interaction_id}.pdf"},
+    )
+
+
+@router.get("/v1/interactions/{interaction_id}/csv")
+def export_interaction_as_csv(
+    interaction_id: str,
+    db: Session = Depends(get_db),
+    x_org_id: str | None = Header(default=None, alias="X-Org-Id"),
+):
+    org_id = x_org_id or "org_test"
+    row = _get_interaction_export_row(db, interaction_id, org_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Interaction not found")
+
+    csv_content = csv_formatter.parse_table_from_text(str(row.get("agent_response") or ""))
+    if not csv_content:
+        raise HTTPException(status_code=400, detail="No table found in response")
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={interaction_id}.csv"},
+    )
+
+
+@router.get("/v1/interactions/{interaction_id}/email")
+def format_interaction_as_email(
+    interaction_id: str,
+    db: Session = Depends(get_db),
+    x_org_id: str | None = Header(default=None, alias="X-Org-Id"),
+):
+    org_id = x_org_id or "org_test"
+    row = _get_interaction_export_row(db, interaction_id, org_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Interaction not found")
+    return email_formatter.format_as_email(str(row.get("agent_response") or ""))
 
 
 @router.post("/v1/sessions", response_model=SessionOut)

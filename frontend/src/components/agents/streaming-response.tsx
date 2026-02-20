@@ -7,7 +7,15 @@ type Props = {
   url: string;
   payload: object;
   headers?: Record<string, string>;
-  onDone?: (data: { response: string; latency_ms?: number; tokens_used?: number; model_used?: string }) => void;
+  onDone?: (data: {
+    response: string;
+    latency_ms?: number;
+    tokens_used?: number;
+    model_used?: string;
+    interaction_id?: string;
+    search_used?: boolean;
+    docs_used?: boolean;
+  }) => void;
   onError?: (message: string) => void;
 };
 
@@ -56,6 +64,9 @@ export function StreamingResponse({ requestId, url, payload, headers, onDone, on
                 latency_ms: Number(parsed.latency_ms || 0),
                 tokens_used: Number(parsed.tokens_used || 0),
                 model_used: String(parsed.model_used || ""),
+                interaction_id: parsed.interaction_id ? String(parsed.interaction_id) : undefined,
+                search_used: Boolean(parsed.search_used),
+                docs_used: Boolean(parsed.docs_used),
               });
               setRunning(false);
             } else if (eventType === "error") {

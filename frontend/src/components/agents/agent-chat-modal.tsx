@@ -9,6 +9,8 @@ import type { AgentDetail, ExecuteResponse } from "@/lib/types";
 import { ChatSkeleton } from "@/components/skeletons/chat-skeleton";
 import { MessageFeedback } from "@/components/agents/message-feedback";
 import { FileUploadButton, type UploadedFileItem } from "@/components/agents/file-upload";
+import { DownloadOptions } from "@/components/agents/download-options";
+import { MessageRenderer } from "@/components/agents/message-renderer";
 import { StreamingResponse } from "@/components/agents/streaming-response";
 
 type Message = {
@@ -296,9 +298,9 @@ export function AgentChatModal({ agentCode, orgId, onClose, onAfterMessage, onSw
               <div
                 className={`text-sm leading-relaxed ${
                   msg.role === "user" ? "text-[#00F0FF]" : "text-white/90"
-                } whitespace-pre-wrap`}
+                }`}
               >
-                {msg.content}
+                <MessageRenderer message={msg.content} />
               </div>
 
               <div className="mt-2 text-xs text-[#00F0FF]/40 font-mono">
@@ -310,6 +312,9 @@ export function AgentChatModal({ agentCode, orgId, onClose, onAfterMessage, onSw
               </div>
 
               {msg.role === "agent" && msg.interactionId ? <MessageFeedback interactionId={msg.interactionId} /> : null}
+              {msg.role === "agent" && msg.interactionId ? (
+                <DownloadOptions interactionId={msg.interactionId} response={msg.content} orgId={orgId} />
+              ) : null}
 
               {msg.role === "agent" && msg.suggestedAgent ? (
                 <div className="mt-3 border border-[#00F0FF]/20 bg-[#00F0FF]/5 p-3">
@@ -365,6 +370,7 @@ export function AgentChatModal({ agentCode, orgId, onClose, onAfterMessage, onSw
                       role: "agent",
                       content: streamData.response || "",
                       timestamp: new Date().toISOString(),
+                      interactionId: streamData.interaction_id,
                       metadata: {
                         model_used: streamData.model_used,
                         latency_ms: streamData.latency_ms,
