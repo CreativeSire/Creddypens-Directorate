@@ -8,6 +8,8 @@ import { apiBaseUrl } from "@/lib/env";
 import type { AgentDetail, ExecuteResponse } from "@/lib/types";
 import { ChatSkeleton } from "@/components/skeletons/chat-skeleton";
 import { MessageFeedback } from "@/components/agents/message-feedback";
+import { FileUploadButton, type UploadedFileItem } from "@/components/agents/file-upload";
+import { StreamingResponse } from "@/components/agents/streaming-response";
 
 type Message = {
   role: "user" | "agent";
@@ -80,16 +82,21 @@ export function AgentChatModal({ agentCode, orgId, onClose, onAfterMessage, onSw
   const [outputFormat, setOutputFormat] = useState<"text" | "markdown" | "json" | "email" | "csv" | "code" | "presentation">("text");
   const [attachments, setAttachments] = useState<LocalAttachment[]>([]);
   const [voiceListening, setVoiceListening] = useState(false);
+  const [uploadedFiles, setUploadedFiles] = useState<UploadedFileItem[]>([]);
+  const [streamRequest, setStreamRequest] = useState<{
+    id: string;
+    payload: Record<string, unknown>;
+  } | null>(null);
+  const [streamError, setStreamError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const imageInputRef = useRef<HTMLInputElement>(null);
   const speechRef = useRef<SpeechRecognitionLike | null>(null);
 
   const [sessionId, setSessionId] = useState<string>(() => newSessionId());
   useEffect(() => {
     setSessionId(newSessionId());
     setAttachments([]);
+    setUploadedFiles([]);
     setWebSearch(false);
     setDeepResearch(false);
     setOutputFormat("text");
@@ -145,33 +152,6 @@ export function AgentChatModal({ agentCode, orgId, onClose, onAfterMessage, onSw
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
-
-  const handleFilesPicked = async (files: FileList | null, kind: "file" | "image") => {
-    if (!files || files.length === 0) return;
-    const list = Array.from(files).slice(0, 4);
-    const next: LocalAttachment[] = [];
-    for (const file of list) {
-      const isTextLike = file.type.includes("text") || file.name.endsWith(".md") || file.name.endsWith(".txt") || file.name.endsWith(".csv") || file.name.endsWith(".json");
-      let excerpt = "";
-      if (isTextLike) {
-        try {
-          const text = await file.text();
-          excerpt = text.slice(0, 1000);
-        } catch {
-          excerpt = "";
-        }
-      } else if (kind === "image") {
-        excerpt = "Image attached by user for analysis.";
-      }
-      next.push({
-        name: file.name,
-        mime_type: file.type || (kind === "image" ? "image/*" : "application/octet-stream"),
-        size_bytes: file.size,
-        content_excerpt: excerpt || undefined,
-      });
-    }
-    setAttachments((prev) => [...prev, ...next].slice(0, 8));
-  };
 
   const toggleVoiceInput = () => {
     const SpeechRecognitionApi =
@@ -230,48 +210,34 @@ export function AgentChatModal({ agentCode, orgId, onClose, onAfterMessage, onSw
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
     setLoading(true);
+    setStreamError(null);
 
     try {
-      const res = await fetch(`${apiBaseUrl()}/v1/agents/${encodeURIComponent(agentCode)}/execute`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Org-Id": orgId },
-        body: JSON.stringify({
-          message: content,
-          session_id: sessionId,
-          context: {
-            company_name: "",
-            tone: "",
-            output_format: outputFormat,
-            web_search: webSearch,
-            deep_research: deepResearch,
-            attachments,
-            additional: {
-              action_menu_enabled: true,
-              requested_tools: {
-                web_search: webSearch,
-                deep_research: deepResearch,
-                voice_input: voiceListening,
-              },
+      const payload = {
+        message: content,
+        session_id: sessionId,
+        file_ids: uploadedFiles.map((item) => item.file_id),
+        context: {
+          company_name: "",
+          tone: "",
+          output_format: outputFormat,
+          web_search: webSearch,
+          deep_research: deepResearch,
+          attachments,
+          additional: {
+            action_menu_enabled: true,
+            requested_tools: {
+              web_search: webSearch,
+              deep_research: deepResearch,
+              voice_input: voiceListening,
             },
           },
-        }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as ExecuteResponse;
-
-      const agentMsg: Message = {
-        role: "agent",
-        content: data.response || "",
-        timestamp: new Date().toISOString(),
-        interactionId: (data.interaction_id || undefined) as string | undefined,
-        metadata: { model_used: data.model_used, latency_ms: data.latency_ms },
-        suggestedAgent: data.suggested_agent || null,
+        },
       };
-      if (typeof data.tokens_used === "number") {
-        agentMsg.metadata = { ...agentMsg.metadata, tokens_used: data.tokens_used };
-      }
-      setMessages((prev) => [...prev, agentMsg]);
-      onAfterMessage?.();
+      setStreamRequest({
+        id: `${Date.now()}-${Math.random()}`,
+        payload,
+      });
     } catch (err) {
       console.error("Failed to send message:", err);
       setMessages((prev) => [
@@ -282,8 +248,8 @@ export function AgentChatModal({ agentCode, orgId, onClose, onAfterMessage, onSw
           timestamp: new Date().toISOString(),
         },
       ]);
+      setStreamRequest(null);
     } finally {
-      setLoading(false);
       setTimeout(() => textareaRef.current?.focus(), 0);
     }
   };
@@ -385,24 +351,69 @@ export function AgentChatModal({ agentCode, orgId, onClose, onAfterMessage, onSw
           </div>
         ))}
 
-        {loading && (
+        {streamRequest && (
           <div className="flex justify-start">
             <div className="bg-[#FFB800]/5 border border-[#FFB800]/20 p-4 flex items-center gap-3">
-              <div className="flex gap-1">
-                <span className="w-2 h-2 bg-[#FFB800] rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
-                <span
-                  className="w-2 h-2 bg-[#FFB800] rounded-full animate-bounce"
-                  style={{ animationDelay: "150ms" }}
+              <div className="w-full">
+                <StreamingResponse
+                  requestId={streamRequest.id}
+                  url={`${apiBaseUrl()}/v1/agents/${encodeURIComponent(agentCode)}/execute/stream`}
+                  payload={streamRequest.payload}
+                  headers={{ "X-Org-Id": orgId }}
+                  onDone={(streamData) => {
+                    const agentMsg: Message = {
+                      role: "agent",
+                      content: streamData.response || "",
+                      timestamp: new Date().toISOString(),
+                      metadata: {
+                        model_used: streamData.model_used,
+                        latency_ms: streamData.latency_ms,
+                        tokens_used: streamData.tokens_used,
+                      },
+                    };
+                    setMessages((prev) => [...prev, agentMsg]);
+                    setStreamRequest(null);
+                    setLoading(false);
+                    onAfterMessage?.();
+                  }}
+                  onError={(message) => {
+                    setStreamError(message);
+                    setMessages((prev) => [
+                      ...prev,
+                      {
+                        role: "agent",
+                        content: "ERROR: Failed to stream response. Please retry.",
+                        timestamp: new Date().toISOString(),
+                      },
+                    ]);
+                    setStreamRequest(null);
+                    setLoading(false);
+                  }}
                 />
-                <span
-                  className="w-2 h-2 bg-[#FFB800] rounded-full animate-bounce"
-                  style={{ animationDelay: "300ms" }}
-                />
+                <div className="mt-2 flex justify-end">
+                  <button
+                    onClick={() => {
+                      setStreamRequest(null);
+                      setLoading(false);
+                      setMessages((prev) => [
+                        ...prev,
+                        {
+                          role: "agent",
+                          content: "Streaming cancelled.",
+                          timestamp: new Date().toISOString(),
+                        },
+                      ]);
+                    }}
+                    className="text-xs border border-[#FFB800]/50 text-[#FFB800] px-2 py-1 tracking-[0.15em]"
+                  >
+                    CANCEL
+                  </button>
+                </div>
               </div>
-              <span className="text-xs text-[#00F0FF]/50">Processing...</span>
             </div>
           </div>
         )}
+        {streamError ? <div className="text-xs text-red-400">{streamError}</div> : null}
 
         <div ref={messagesEndRef} />
       </div>
@@ -424,24 +435,9 @@ export function AgentChatModal({ agentCode, orgId, onClose, onAfterMessage, onSw
             rows={2}
             disabled={loading}
           />
-          <input
-            ref={fileInputRef}
-            type="file"
-            className="hidden"
-            multiple
-            onChange={(e) => void handleFilesPicked(e.target.files, "file")}
-          />
-          <input
-            ref={imageInputRef}
-            type="file"
-            className="hidden"
-            accept="image/*"
-            multiple
-            onChange={(e) => void handleFilesPicked(e.target.files, "image")}
-          />
           <button
             onClick={() => void sendMessage()}
-            disabled={loading || !input.trim()}
+            disabled={loading || !!streamRequest || !input.trim()}
             className="bg-[#FFB800] hover:bg-[#FFB800]/90 disabled:bg-white/10 disabled:text-white/40 disabled:cursor-not-allowed px-6 py-3 flex items-center gap-2 text-[#0A0F14] font-bold text-sm tracking-[0.25em] transition-all focus-ring"
           >
             <Send className="w-4 h-4" />
@@ -491,19 +487,20 @@ export function AgentChatModal({ agentCode, orgId, onClose, onAfterMessage, onSw
           {showActions && (
             <div className="mt-2 border border-[#00F0FF]/20 bg-[#00F0FF]/5 p-3 flex items-center gap-2 flex-wrap">
               <button
-                onClick={() => fileInputRef.current?.click()}
+                onClick={() => setShowActions((v) => !v)}
                 className="px-3 py-2 border border-[#00F0FF]/30 text-[#00F0FF]/80 text-xs hover:text-[#00F0FF] focus-ring inline-flex items-center gap-2"
               >
                 <FileText className="w-3.5 h-3.5" /> ADD FILES
               </button>
               <button
-                onClick={() => imageInputRef.current?.click()}
+                onClick={() => setShowActions((v) => !v)}
                 className="px-3 py-2 border border-[#00F0FF]/30 text-[#00F0FF]/80 text-xs hover:text-[#00F0FF] focus-ring inline-flex items-center gap-2"
               >
                 <ImageIcon className="w-3.5 h-3.5" /> ADD IMAGE
               </button>
             </div>
           )}
+          {showActions ? <FileUploadButton orgId={orgId} onChange={setUploadedFiles} /> : null}
           {attachments.length > 0 && (
             <div className="mt-2 flex flex-wrap gap-2">
               {attachments.map((attachment, idx) => (

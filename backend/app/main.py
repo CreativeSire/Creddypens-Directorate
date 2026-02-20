@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router
 from app.api.academy import router as academy_router
+from app.api.files import router as files_router
 from app.db import engine
 from app.schema import ensure_schema
 from app.settings import settings
@@ -30,6 +31,7 @@ app.add_middleware(
 
 app.include_router(router)
 app.include_router(academy_router)
+app.include_router(files_router)
 
 
 @app.on_event("startup")

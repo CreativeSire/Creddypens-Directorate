@@ -5,6 +5,9 @@ import time
 import uuid
 from typing import Any
 
+from sqlalchemy import text
+
+from app.db import SessionLocal
 from app.llm.search_detector import search_detector
 from app.runtime.model_policy import model_policy_service
 from app.runtime.tool_registry import ToolCallContext, tool_registry
@@ -52,6 +55,99 @@ def _coerce_text(value: Any) -> str:
     return ""
 
 
+def inject_memories(*, org_id: str | None, agent_code: str | None, user_message: str) -> str:
+    scoped_org = (org_id or "").strip()
+    if not scoped_org:
+        return ""
+    try:
+        with SessionLocal() as db:
+            rows = db.execute(
+                text(
+                    """
+                    select memory_id, agent_code, memory_type, memory_key, memory_value, confidence
+                    from agent_memories
+                    where org_id = :org_id
+                      and is_active = true
+                      and (
+                        agent_code is null
+                        or agent_code = ''
+                        or lower(agent_code) = lower(:agent_code)
+                      )
+                    order by confidence desc, last_accessed desc
+                    limit 12;
+                    """
+                ),
+                {"org_id": scoped_org, "agent_code": agent_code or ""},
+            ).mappings().all()
+            if not rows:
+                return ""
+            db.execute(
+                text(
+                    """
+                    update agent_memories
+                    set access_count = access_count + 1, last_accessed = now()
+                    where memory_id = any(:memory_ids::uuid[]);
+                    """
+                ),
+                {"memory_ids": [str(r["memory_id"]) for r in rows]},
+            )
+            db.commit()
+        lines = ["[ORG MEMORY CONTEXT]"]
+        for row in rows:
+            scope = "org" if not row.get("agent_code") else str(row["agent_code"])
+            lines.append(
+                f"- ({scope}) {row['memory_type']}::{row['memory_key']} = {row['memory_value']} "
+                f"(confidence {float(row['confidence'] or 0):.2f})"
+            )
+        lines.append("[END ORG MEMORY CONTEXT]")
+        return "\n".join(lines)
+    except Exception as exc:
+        logger.error("Memory injection failed: %s", exc)
+        return ""
+
+
+def inject_file_context(*, org_id: str | None, file_ids: list[str] | None) -> str:
+    scoped_org = (org_id or "").strip()
+    if not scoped_org or not file_ids:
+        return ""
+    clean_ids = [item.strip() for item in file_ids if item and item.strip()]
+    if not clean_ids:
+        return ""
+    try:
+        with SessionLocal() as db:
+            rows = db.execute(
+                text(
+                    """
+                    select file_id, filename, file_type, extracted_text
+                    from uploaded_files
+                    where org_id = :org_id
+                      and is_active = true
+                      and file_id = any(:file_ids::uuid[])
+                    order by uploaded_at desc
+                    limit 8;
+                    """
+                ),
+                {"org_id": scoped_org, "file_ids": clean_ids},
+            ).mappings().all()
+        if not rows:
+            return ""
+        lines = ["[UPLOADED FILE CONTEXT]"]
+        for row in rows:
+            text_excerpt = str(row.get("extracted_text") or "").strip()
+            if len(text_excerpt) > 2000:
+                text_excerpt = text_excerpt[:2000].rstrip() + "..."
+            if not text_excerpt:
+                text_excerpt = "No extractable text content."
+            lines.append(
+                f"- {row['filename']} ({row['file_type']}):\n{text_excerpt}"
+            )
+        lines.append("[END UPLOADED FILE CONTEXT]")
+        return "\n\n".join(lines)
+    except Exception as exc:
+        logger.error("File context injection failed: %s", exc)
+        return ""
+
+
 def to_litellm_model(provider: str, model: str) -> str:
     provider = (provider or "").strip()
     model = (model or "").strip()
@@ -76,6 +172,7 @@ def execute_via_litellm(
     org_id: str | None = None,
     session_id: str | None = None,
     agent_code: str | None = None,
+    file_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     trace_id = trace_id or str(uuid.uuid4())
     search_used = False
@@ -88,6 +185,12 @@ def execute_via_litellm(
         session_id=session_id,
         agent_code=agent_code,
     )
+    memory_context = inject_memories(org_id=org_id, agent_code=agent_code, user_message=user)
+    if memory_context:
+        additional_blocks.append(memory_context)
+    file_context = inject_file_context(org_id=org_id, file_ids=file_ids)
+    if file_context:
+        additional_blocks.append(file_context)
 
     if enable_search and settings.enable_web_search:
         try:

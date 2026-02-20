@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pydantic import BaseModel, Field
 
 
@@ -25,6 +26,7 @@ class ExecuteIn(BaseModel):
     message: str = Field(min_length=1, max_length=20000)
     context: ExecuteContext = Field(default_factory=ExecuteContext)
     session_id: str = Field(min_length=1, max_length=128)
+    file_ids: list[str] = Field(default_factory=list)
 
 
 class SuggestedAgent(BaseModel):
@@ -56,3 +58,45 @@ class ExecuteOut(BaseModel):
     # Referral fields — populated only when the agent suggests a colleague
     referral_triggered: bool = False
     suggested_agent: SuggestedAgent | None = None
+
+
+class MemoryCreateIn(BaseModel):
+    memory_type: str = Field(min_length=1, max_length=64)
+    memory_key: str = Field(min_length=1, max_length=128)
+    memory_value: str = Field(min_length=1, max_length=8000)
+    agent_code: str | None = Field(default=None, max_length=32)
+    confidence: float = Field(default=0.8, ge=0.0, le=1.0)
+    source: str = Field(default="manual", max_length=64)
+
+
+class MemoryUpdateIn(BaseModel):
+    memory_value: str | None = Field(default=None, min_length=1, max_length=8000)
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    is_active: bool | None = None
+
+
+class MemoryExtractIn(BaseModel):
+    session_id: str = Field(min_length=1, max_length=128)
+    agent_code: str | None = Field(default=None, max_length=32)
+    lookback_messages: int = Field(default=20, ge=2, le=100)
+
+
+class MemoryOut(BaseModel):
+    memory_id: str
+    org_id: str
+    agent_code: str | None = None
+    memory_type: str
+    memory_key: str
+    memory_value: str
+    confidence: float
+    source: str
+    created_at: datetime | None = None
+    last_accessed: datetime | None = None
+    access_count: int
+    is_active: bool
+
+
+class MemoryExtractOut(BaseModel):
+    created: int
+    updated: int
+    memories: list[MemoryOut] = Field(default_factory=list)

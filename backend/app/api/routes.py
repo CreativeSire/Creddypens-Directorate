@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app.agents.prompts import inject_domain_block, system_prompt_for_agent
 from app.db import SessionLocal, get_db
 from app.llm.litellm_client import LLMError, execute_via_litellm
+from app.memory.extractor import memory_extractor
 from app.llm.multi_router import get_multi_llm_router
 from app.models import AgentCatalog, HiredAgent
 from app.runtime.hooks import RuntimeEvent, hook_bus
@@ -25,7 +26,17 @@ from app.runtime.tool_policy import tool_policy_service
 from app.runtime.tool_registry import ToolCallContext, tool_registry
 from app.schemas import AgentDetailOut, AgentOut
 from app.schemas_chat import ChatIn, ChatOut
-from app.schemas_execute import ExecuteContext, ExecuteIn, ExecuteOut, SuggestedAgent
+from app.schemas_execute import (
+    ExecuteContext,
+    ExecuteIn,
+    ExecuteOut,
+    MemoryCreateIn,
+    MemoryExtractIn,
+    MemoryExtractOut,
+    MemoryOut,
+    MemoryUpdateIn,
+    SuggestedAgent,
+)
 from app.settings import settings
 
 try:
@@ -235,6 +246,197 @@ def llm_router_catalog() -> dict:
             }
         )
     return {"providers": items}
+
+
+def _memory_row_to_out(row: dict) -> MemoryOut:
+    return MemoryOut(
+        memory_id=str(row["memory_id"]),
+        org_id=str(row["org_id"]),
+        agent_code=(str(row["agent_code"]) if row.get("agent_code") else None),
+        memory_type=str(row["memory_type"]),
+        memory_key=str(row["memory_key"]),
+        memory_value=str(row["memory_value"]),
+        confidence=float(row["confidence"] or 0),
+        source=str(row["source"] or "manual"),
+        created_at=row.get("created_at"),
+        last_accessed=row.get("last_accessed"),
+        access_count=int(row.get("access_count") or 0),
+        is_active=bool(row.get("is_active")),
+    )
+
+
+@router.get("/v1/organizations/{org_id}/memories", response_model=list[MemoryOut])
+def list_memories(
+    org_id: str,
+    agent_code: str | None = None,
+    memory_type: str | None = None,
+    include_inactive: bool = False,
+    db: Session = Depends(get_db),
+) -> list[MemoryOut]:
+    sql = """
+      select memory_id, org_id, agent_code, memory_type, memory_key, memory_value, confidence, source, created_at, last_accessed, access_count, is_active
+      from agent_memories
+      where org_id = :org_id
+    """
+    params: dict[str, object] = {"org_id": org_id}
+    if agent_code:
+        sql += " and coalesce(agent_code, '') = :agent_code"
+        params["agent_code"] = agent_code
+    if memory_type:
+        sql += " and memory_type = :memory_type"
+        params["memory_type"] = memory_type
+    if not include_inactive:
+        sql += " and is_active = true"
+    sql += " order by last_accessed desc, created_at desc"
+    rows = db.execute(text(sql), params).mappings().all()
+    return [_memory_row_to_out(dict(r)) for r in rows]
+
+
+@router.post("/v1/organizations/{org_id}/memories", response_model=MemoryOut)
+def create_memory(org_id: str, payload: MemoryCreateIn, db: Session = Depends(get_db)) -> MemoryOut:
+    db.execute(
+        text("insert into organizations (org_id, name) values (:org_id, :name) on conflict (org_id) do nothing"),
+        {"org_id": org_id, "name": ""},
+    )
+    row = db.execute(
+        text(
+            """
+            insert into agent_memories (org_id, agent_code, memory_type, memory_key, memory_value, confidence, source, last_accessed, access_count, is_active)
+            values (:org_id, nullif(:agent_code, ''), :memory_type, :memory_key, :memory_value, :confidence, :source, now(), 0, true)
+            on conflict (org_id, coalesce(agent_code, ''), memory_type, memory_key)
+            do update set
+              memory_value = excluded.memory_value,
+              confidence = excluded.confidence,
+              source = excluded.source,
+              is_active = true,
+              last_accessed = now()
+            returning memory_id, org_id, agent_code, memory_type, memory_key, memory_value, confidence, source, created_at, last_accessed, access_count, is_active;
+            """
+        ),
+        {
+            "org_id": org_id,
+            "agent_code": payload.agent_code or "",
+            "memory_type": payload.memory_type.strip().lower(),
+            "memory_key": payload.memory_key.strip().lower(),
+            "memory_value": payload.memory_value.strip(),
+            "confidence": float(payload.confidence),
+            "source": payload.source.strip() or "manual",
+        },
+    ).mappings().first()
+    db.commit()
+    if not row:
+        raise HTTPException(status_code=500, detail="Failed to store memory")
+    return _memory_row_to_out(dict(row))
+
+
+@router.put("/v1/memories/{memory_id}", response_model=MemoryOut)
+def update_memory(memory_id: str, payload: MemoryUpdateIn, db: Session = Depends(get_db)) -> MemoryOut:
+    row = db.execute(
+        text(
+            """
+            update agent_memories
+            set
+              memory_value = coalesce(:memory_value, memory_value),
+              confidence = coalesce(:confidence, confidence),
+              is_active = coalesce(:is_active, is_active),
+              last_accessed = now()
+            where memory_id = cast(:memory_id as uuid)
+            returning memory_id, org_id, agent_code, memory_type, memory_key, memory_value, confidence, source, created_at, last_accessed, access_count, is_active;
+            """
+        ),
+        {
+            "memory_id": memory_id,
+            "memory_value": payload.memory_value.strip() if payload.memory_value else None,
+            "confidence": float(payload.confidence) if payload.confidence is not None else None,
+            "is_active": payload.is_active,
+        },
+    ).mappings().first()
+    db.commit()
+    if not row:
+        raise HTTPException(status_code=404, detail="Memory not found")
+    return _memory_row_to_out(dict(row))
+
+
+@router.delete("/v1/memories/{memory_id}")
+def delete_memory(memory_id: str, db: Session = Depends(get_db)) -> dict:
+    changed = db.execute(
+        text(
+            """
+            update agent_memories
+            set is_active = false, last_accessed = now()
+            where memory_id = cast(:memory_id as uuid);
+            """
+        ),
+        {"memory_id": memory_id},
+    ).rowcount
+    db.commit()
+    if not changed:
+        raise HTTPException(status_code=404, detail="Memory not found")
+    return {"ok": True, "memory_id": memory_id}
+
+
+@router.post("/v1/organizations/{org_id}/memories/extract", response_model=MemoryExtractOut)
+def extract_memories(org_id: str, payload: MemoryExtractIn, db: Session = Depends(get_db)) -> MemoryExtractOut:
+    db.execute(
+        text("insert into organizations (org_id, name) values (:org_id, :name) on conflict (org_id) do nothing"),
+        {"org_id": org_id, "name": ""},
+    )
+    rows = db.execute(
+        text(
+            """
+            select role, content
+            from chat_session_messages
+            where session_id = :session_id
+            order by created_at desc
+            limit :limit;
+            """
+        ),
+        {"session_id": payload.session_id, "limit": payload.lookback_messages},
+    ).mappings().all()
+    messages = [{"role": str(r["role"]), "content": str(r["content"])} for r in reversed(rows)]
+    if not messages:
+        raise HTTPException(status_code=404, detail="No session messages found for extraction")
+
+    extracted = memory_extractor.extract_from_messages(messages=messages, agent_code=payload.agent_code)
+    created = 0
+    updated = 0
+    output: list[MemoryOut] = []
+    for memory in extracted:
+        row = db.execute(
+            text(
+                """
+                insert into agent_memories (org_id, agent_code, memory_type, memory_key, memory_value, confidence, source, last_accessed, access_count, is_active)
+                values (:org_id, nullif(:agent_code, ''), :memory_type, :memory_key, :memory_value, :confidence, 'auto_extract', now(), 0, true)
+                on conflict (org_id, coalesce(agent_code, ''), memory_type, memory_key)
+                do update set
+                  memory_value = excluded.memory_value,
+                  confidence = excluded.confidence,
+                  source = excluded.source,
+                  is_active = true,
+                  last_accessed = now(),
+                  access_count = agent_memories.access_count + 1
+                returning memory_id, org_id, agent_code, memory_type, memory_key, memory_value, confidence, source, created_at, last_accessed, access_count, is_active,
+                          (xmax = 0) as inserted;
+                """
+            ),
+            {
+                "org_id": org_id,
+                "agent_code": payload.agent_code or "",
+                "memory_type": str(memory["memory_type"]),
+                "memory_key": str(memory["memory_key"]),
+                "memory_value": str(memory["memory_value"]),
+                "confidence": float(memory.get("confidence", 0.7)),
+            },
+        ).mappings().first()
+        if not row:
+            continue
+        if bool(row.get("inserted")):
+            created += 1
+        else:
+            updated += 1
+        output.append(_memory_row_to_out(dict(row)))
+    db.commit()
+    return MemoryExtractOut(created=created, updated=updated, memories=output)
 
 
 @router.get("/v1/agents", response_model=list[AgentOut])
@@ -996,6 +1198,7 @@ def execute_agent(
             org_id=org_id,
             session_id=session_id,
             agent_code=agent_code,
+            file_ids=payload.file_ids,
         )
     except LLMError as e:
         hook_bus.emit(

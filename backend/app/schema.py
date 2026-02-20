@@ -237,6 +237,42 @@ def ensure_schema(engine: Engine) -> None:
     create index if not exists idx_workflow_runs_org on workflow_runs(org_id, started_at desc);
     create index if not exists idx_workflow_runs_template on workflow_runs(template_id, started_at desc);
 
+    -- Durable org/agent memory layer
+    create table if not exists agent_memories (
+      memory_id uuid primary key default gen_random_uuid(),
+      org_id text not null references organizations(org_id) on delete cascade,
+      agent_code text references agent_catalog(code) on delete cascade,
+      memory_type text not null,
+      memory_key text not null,
+      memory_value text not null,
+      confidence double precision not null default 0.8,
+      source text not null default 'manual',
+      created_at timestamptz not null default now(),
+      last_accessed timestamptz not null default now(),
+      access_count integer not null default 0,
+      is_active boolean not null default true
+    );
+    create index if not exists idx_agent_memories_org_agent on agent_memories(org_id, agent_code, is_active);
+    create index if not exists idx_agent_memories_type on agent_memories(memory_type, org_id);
+    create unique index if not exists uq_agent_memories_scope
+      on agent_memories(org_id, coalesce(agent_code, ''), memory_type, memory_key);
+
+    -- Uploaded files and extracted text context
+    create table if not exists uploaded_files (
+      file_id uuid primary key default gen_random_uuid(),
+      org_id text not null references organizations(org_id) on delete cascade,
+      filename text not null,
+      file_path text not null,
+      file_type text not null,
+      file_size bigint not null default 0,
+      extracted_text text not null default '',
+      uploaded_by text not null default 'system',
+      uploaded_at timestamptz not null default now(),
+      is_active boolean not null default true
+    );
+    create index if not exists idx_uploaded_files_org on uploaded_files(org_id, uploaded_at desc);
+    create index if not exists idx_uploaded_files_active on uploaded_files(org_id, is_active);
+
     -- Internal knowledge base for document retrieval
     create table if not exists knowledge_base (
       id uuid primary key default gen_random_uuid(),

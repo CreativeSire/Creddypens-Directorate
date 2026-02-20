@@ -57,6 +57,8 @@ class Settings(BaseSettings):
     session_compaction_turns: int = Field(default=24, validation_alias="SESSION_COMPACTION_TURNS")
     session_context_recent_turns: int = Field(default=8, validation_alias="SESSION_CONTEXT_RECENT_TURNS")
     session_max_parallel_per_org: int = Field(default=50, validation_alias="SESSION_MAX_PARALLEL_PER_ORG")
+    upload_dir: str = Field(default="uploads", validation_alias="UPLOAD_DIR")
+    upload_max_size_mb: int = Field(default=10, validation_alias="UPLOAD_MAX_SIZE_MB")
 
 
 settings = Settings()

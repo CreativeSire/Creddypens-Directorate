@@ -99,6 +99,37 @@ CreddyPens is an AI workforce platform where organizations hire role-based AI ag
 ## 5) Latest major completed milestones
 
 ## 2026-02-20
+- Week 1 completion pass (feature build plan):
+  - Memory system completed:
+    - Added durable `agent_memories` table + indexes in `backend/app/schema.py`.
+    - Added memory CRUD + auto-extract APIs:
+      - `GET /v1/organizations/{org_id}/memories`
+      - `POST /v1/organizations/{org_id}/memories`
+      - `PUT /v1/memories/{memory_id}`
+      - `DELETE /v1/memories/{memory_id}`
+      - `POST /v1/organizations/{org_id}/memories/extract`
+    - Added `MemoryExtractor` (`backend/app/memory/extractor.py`) with structured extraction + heuristic fallback.
+    - Added memory injection into LLM execution path (`inject_memories` in `backend/app/llm/litellm_client.py`).
+    - Added settings UI for memory management (`frontend/src/components/settings/memory-manager.tsx`, wired in dashboard settings page).
+  - File handling completed:
+    - Added `uploaded_files` table + indexes in `backend/app/schema.py`.
+    - Added file upload/list/get/delete API router (`backend/app/api/files.py`):
+      - `POST /v1/files/upload`
+      - `GET /v1/files/{file_id}`
+      - `DELETE /v1/files/{file_id}`
+      - `GET /v1/organizations/{org_id}/files`
+    - Added file extraction stack (`backend/app/files/extractors.py`) for PDF/DOCX/XLSX/CSV/text/images.
+    - Added file context injection into execution (`inject_file_context` in `backend/app/llm/litellm_client.py`).
+    - Added `file_ids` support to execute payload schema.
+  - Frontend streaming/chat completion:
+    - Added `StreamingResponse` SSE renderer (`frontend/src/components/agents/streaming-response.tsx`).
+    - Added upload button with drag-drop and file selection UI (`frontend/src/components/agents/file-upload.tsx`).
+    - Integrated both into agent chat modal with cancel support and `file_ids` forwarding.
+- Validation executed:
+  - Backend compile: `python -m compileall backend/app backend/scripts -q` (pass)
+  - Frontend lint: `npm run -s lint` (pass)
+  - Extractor module checks (memory extraction + CSV extraction) (pass)
+
 - Workflow automation layer expanded:
   - Added workflow template persistence (`workflow_templates`) and endpoints to save/list/run templates.
   - Added recurring workflow schedules (`workflow_schedules`) with cron expression support and next-run calculation.

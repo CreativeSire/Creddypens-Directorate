@@ -21,6 +21,7 @@ export type AgentDetail = Agent & {
 
 export type ExecuteRequest = {
   message: string;
+  file_ids?: string[];
   context: {
     company_name?: string;
     tone?: string;
