@@ -14,6 +14,7 @@ from sqlalchemy import func as sqlfunc, select, text
 from sqlalchemy.orm import Session
 
 from app.agents.prompts import inject_domain_block, system_prompt_for_agent
+from app.analytics.queries import get_activity_timeseries, get_costs_by_department, get_overview
 from app.db import SessionLocal, get_db
 from app.integrations.email import email_integration
 from app.integrations.slack import slack_integration
@@ -564,6 +565,24 @@ def get_dashboard_stats(org_id: str, db: Session = Depends(get_db)) -> dict:
         "avg_quality_score": round(float(avg_quality or 0), 2),
         "recent_activities": activities,
     }
+
+
+@router.get("/v1/organizations/{org_id}/analytics/overview")
+def get_analytics_overview(org_id: str, days: int = 30, db: Session = Depends(get_db)) -> dict:
+    days = max(1, min(days, 365))
+    return get_overview(db=db, org_id=org_id, days=days)
+
+
+@router.get("/v1/organizations/{org_id}/analytics/costs")
+def get_analytics_costs(org_id: str, days: int = 30, db: Session = Depends(get_db)) -> dict:
+    days = max(1, min(days, 365))
+    return get_costs_by_department(db=db, org_id=org_id, days=days)
+
+
+@router.get("/v1/organizations/{org_id}/analytics/activity")
+def get_analytics_activity(org_id: str, days: int = 30, db: Session = Depends(get_db)) -> dict:
+    days = max(1, min(days, 365))
+    return get_activity_timeseries(db=db, org_id=org_id, days=days)
 
 
 @router.get("/v1/agents/{agent_code}", response_model=AgentDetailOut)
