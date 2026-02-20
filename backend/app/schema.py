@@ -194,11 +194,13 @@ def ensure_schema(engine: Engine) -> None:
       description text not null default '',
       context jsonb not null default '{}'::jsonb,
       steps jsonb not null default '[]'::jsonb,
+      workflow_definition jsonb not null default '{}'::jsonb,
       is_active boolean not null default true,
       created_at timestamptz not null default now(),
       updated_at timestamptz not null default now(),
       unique(org_id, name)
     );
+    alter table if exists workflow_templates add column if not exists workflow_definition jsonb not null default '{}'::jsonb;
     create index if not exists idx_workflow_templates_org on workflow_templates(org_id, created_at desc);
 
     create table if not exists workflow_schedules (

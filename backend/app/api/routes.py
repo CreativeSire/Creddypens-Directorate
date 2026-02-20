@@ -24,6 +24,7 @@ from app.runtime.model_policy import model_policy_service
 from app.runtime.session_manager import session_manager
 from app.runtime.tool_policy import tool_policy_service
 from app.runtime.tool_registry import ToolCallContext, tool_registry
+from app.workflows.engine import WorkflowEngine
 from app.schemas import AgentDetailOut, AgentOut
 from app.schemas_chat import ChatIn, ChatOut
 from app.schemas_execute import (
@@ -1591,9 +1592,13 @@ def upsert_model_policy(
 
 
 class WorkflowStepIn(BaseModel):
+    id: str | None = Field(default=None, min_length=1, max_length=64)
     agent_code: str = Field(min_length=1, max_length=64)
     message: str | None = None
     use_previous_response: bool = True
+    conditions: dict[str, str] = Field(default_factory=dict)
+    next: str | None = Field(default=None, max_length=64)
+    set_var: str | None = Field(default=None, max_length=64)
 
 
 class WorkflowExecuteIn(BaseModel):
@@ -1601,10 +1606,12 @@ class WorkflowExecuteIn(BaseModel):
     session_id: str | None = Field(default=None, min_length=1, max_length=128)
     context: ExecuteContext = Field(default_factory=ExecuteContext)
     steps: list[WorkflowStepIn] = Field(min_length=1)
+    workflow_definition: dict | None = None
 
 
 class WorkflowStepOut(BaseModel):
     step_index: int
+    step_id: str | None = None
     agent_code: str
     input_message: str
     response: str
@@ -1621,9 +1628,13 @@ class WorkflowExecuteOut(BaseModel):
 
 
 class WorkflowTemplateStep(BaseModel):
+    id: str | None = Field(default=None, min_length=1, max_length=64)
     agent_code: str = Field(min_length=1, max_length=64)
     message: str | None = None
     use_previous_response: bool = True
+    conditions: dict[str, str] = Field(default_factory=dict)
+    next: str | None = Field(default=None, max_length=64)
+    set_var: str | None = Field(default=None, max_length=64)
 
 
 class WorkflowTemplateIn(BaseModel):
@@ -1631,6 +1642,7 @@ class WorkflowTemplateIn(BaseModel):
     description: str = Field(default="", max_length=1000)
     context: ExecuteContext = Field(default_factory=ExecuteContext)
     steps: list[WorkflowTemplateStep] = Field(min_length=1)
+    workflow_definition: dict | None = None
     is_active: bool = True
 
 
@@ -1640,6 +1652,7 @@ class WorkflowTemplateOut(BaseModel):
     description: str
     context: ExecuteContext
     steps: list[WorkflowTemplateStep]
+    workflow_definition: dict
     is_active: bool
     created_at: datetime
     updated_at: datetime
@@ -1716,6 +1729,34 @@ def _merge_context(base: ExecuteContext, override: ExecuteContext | None) -> Exe
     return ExecuteContext(**data)
 
 
+def _build_workflow_definition(steps: list[WorkflowStepIn]) -> dict:
+    built_steps: list[dict] = []
+    for index, step in enumerate(steps, start=1):
+        step_id = (step.id or f"step_{index}").strip()
+        built_steps.append(
+            {
+                "id": step_id,
+                "agent_code": step.agent_code.strip(),
+                "input": (step.message or "").strip(),
+                "use_previous_response": bool(step.use_previous_response),
+                "conditions": dict(step.conditions or {}),
+                "next": (step.next or "").strip() or None,
+                "set_var": (step.set_var or "").strip() or None,
+            }
+        )
+    return {"start_step_id": built_steps[0]["id"] if built_steps else None, "steps": built_steps}
+
+
+@router.post("/v1/workflows/validate")
+def validate_workflow_definition(payload: dict, db: Session = Depends(get_db)) -> dict:
+    definition = payload.get("workflow_definition") if isinstance(payload, dict) else None
+    if not isinstance(definition, dict):
+        raise HTTPException(status_code=400, detail="workflow_definition must be an object")
+    engine = WorkflowEngine(db)
+    errors = engine.validate_definition(definition)
+    return {"valid": len(errors) == 0, "errors": errors}
+
+
 @router.post("/v1/workflows/execute", response_model=WorkflowExecuteOut)
 def execute_workflow(
     payload: WorkflowExecuteIn,
@@ -1731,113 +1772,34 @@ def execute_workflow(
 
     workflow_id = str(uuid.uuid4())
     session_id = payload.session_id or f"wf-{workflow_id}"
-    current_message = payload.initial_message
-    outputs: list[WorkflowStepOut] = []
-
-    for idx, step in enumerate(payload.steps, start=1):
-        agent_code = step.agent_code.strip()
-        agent = db.execute(select(AgentCatalog).where(AgentCatalog.code == agent_code)).scalars().first()
-        if not agent:
-            raise HTTPException(status_code=404, detail=f"Agent not found in workflow step {idx}: {agent_code}")
-
-        hired = (
-            db.execute(
-                select(HiredAgent)
-                .where(HiredAgent.org_id == org_id)
-                .where(HiredAgent.agent_code == agent_code)
-                .where(HiredAgent.status == "active")
-            )
-            .scalars()
-            .first()
+    definition = payload.workflow_definition if isinstance(payload.workflow_definition, dict) else _build_workflow_definition(payload.steps)
+    context = payload.context
+    engine = WorkflowEngine(db)
+    final_response, step_results = engine.execute_workflow(
+        org_id=org_id,
+        session_id=session_id,
+        initial_message=payload.initial_message,
+        context=context,
+        workflow_definition=definition,
+    )
+    outputs = [
+        WorkflowStepOut(
+            step_index=item.step_index,
+            step_id=item.step_id,
+            agent_code=item.agent_code,
+            input_message=item.input_message,
+            response=item.response,
+            model_used=item.model_used,
+            latency_ms=item.latency_ms,
+            trace_id=item.trace_id,
         )
-        if not hired:
-            raise HTTPException(status_code=403, detail=f"Agent not hired for step {idx}: {agent_code}")
-
-        input_message = (step.message or "").strip()
-        if not input_message:
-            input_message = current_message
-        elif step.use_previous_response:
-            input_message = f"{input_message}\n\nPrevious step output:\n{current_message}"
-
-        system_prompt = (agent.system_prompt or "").strip() or system_prompt_for_agent(agent_code)
-        system_prompt = inject_domain_block(system_prompt, agent)
-
-        context_lines = _to_context_lines(payload.context)
-        memory_block = _session_memory_block(
-            db=db,
-            org_id=org_id,
-            agent_code=agent_code,
-            session_id=session_id,
-        )
-        if memory_block:
-            context_lines.append(memory_block)
-
-        if context_lines:
-            system_prompt = system_prompt + "\n\nClient Context:\n" + "\n".join(context_lines)
-
-        trace_id = str(uuid.uuid4())
-        try:
-            result = execute_via_litellm(
-                provider=agent.llm_provider or "",
-                model=agent.llm_model or "",
-                system=system_prompt,
-                user=input_message,
-                trace_id=trace_id,
-                enable_search=bool(payload.context.web_search),
-                enable_docs=bool(payload.context.doc_retrieval),
-                org_id=org_id,
-                session_id=session_id,
-                agent_code=agent_code,
-            )
-        except LLMError as e:
-            raise HTTPException(status_code=503, detail=f"Workflow step {idx} failed: {e}") from e
-
-        response_text = result.get("response") or result.get("content") or result.get("text") or ""
-        current_message = response_text
-
-        try:
-            db.execute(
-                text(
-                    """
-                    insert into interaction_logs
-                      (org_id, agent_code, session_id, message, response, model_used, latency_ms, tokens_used, quality_score, trace_id)
-                    values
-                      (:org_id, :agent_code, :session_id, :message, :response, :model_used, :latency_ms, :tokens_used, :quality_score, :trace_id);
-                    """
-                ),
-                {
-                    "org_id": org_id,
-                    "agent_code": agent_code,
-                    "session_id": session_id,
-                    "message": input_message,
-                    "response": response_text,
-                    "model_used": result.get("model_used") or "",
-                    "latency_ms": int(result.get("latency_ms") or 0),
-                    "tokens_used": int(result.get("tokens_used") or 0),
-                    "quality_score": 0.85,
-                    "trace_id": result.get("trace_id") or trace_id,
-                },
-            )
-            db.commit()
-        except Exception:
-            db.rollback()
-
-        outputs.append(
-            WorkflowStepOut(
-                step_index=idx,
-                agent_code=agent_code,
-                input_message=input_message,
-                response=response_text,
-                model_used=result.get("model_used") or "",
-                latency_ms=int(result.get("latency_ms") or 0),
-                trace_id=result.get("trace_id") or trace_id,
-            )
-        )
+        for item in step_results
+    ]
 
     return WorkflowExecuteOut(
         workflow_id=workflow_id,
         session_id=session_id,
-        final_response=current_message,
+        final_response=final_response,
         steps=outputs,
     )
 
@@ -1854,6 +1816,11 @@ def create_workflow_template(
     max_steps = max(1, int(settings.workflow_max_steps))
     if len(payload.steps) > max_steps:
         raise HTTPException(status_code=400, detail=f"Too many steps. Max allowed: {max_steps}")
+    workflow_definition = payload.workflow_definition or _build_workflow_definition([WorkflowStepIn(**item.model_dump()) for item in payload.steps])
+    engine = WorkflowEngine(db)
+    errors = engine.validate_definition(workflow_definition)
+    if errors:
+        raise HTTPException(status_code=400, detail="; ".join(errors))
 
     db.execute(
         text("insert into organizations (org_id, name) values (:org_id, :name) on conflict (org_id) do nothing"),
@@ -1863,9 +1830,9 @@ def create_workflow_template(
         row = db.execute(
             text(
                 """
-                insert into workflow_templates (org_id, name, description, context, steps, is_active)
-                values (:org_id, :name, :description, cast(:context as jsonb), cast(:steps as jsonb), :is_active)
-                returning template_id, name, description, context, steps, is_active, created_at, updated_at;
+                insert into workflow_templates (org_id, name, description, context, steps, workflow_definition, is_active)
+                values (:org_id, :name, :description, cast(:context as jsonb), cast(:steps as jsonb), cast(:workflow_definition as jsonb), :is_active)
+                returning template_id, name, description, context, steps, workflow_definition, is_active, created_at, updated_at;
                 """
             ),
             {
@@ -1874,6 +1841,7 @@ def create_workflow_template(
                 "description": payload.description.strip(),
                 "context": json.dumps(payload.context.model_dump()),
                 "steps": json.dumps([step.model_dump() for step in payload.steps]),
+                "workflow_definition": json.dumps(workflow_definition),
                 "is_active": payload.is_active,
             },
         ).mappings().first()
@@ -1891,6 +1859,7 @@ def create_workflow_template(
         description=str(row["description"] or ""),
         context=ExecuteContext(**(row["context"] or {})),
         steps=[WorkflowTemplateStep(**item) for item in (row["steps"] or [])],
+        workflow_definition=dict(row["workflow_definition"] or {}),
         is_active=bool(row["is_active"]),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
@@ -1907,7 +1876,7 @@ def list_workflow_templates(
     if include_inactive:
         stmt = text(
             """
-            select template_id, name, description, context, steps, is_active, created_at, updated_at
+            select template_id, name, description, context, steps, workflow_definition, is_active, created_at, updated_at
             from workflow_templates
             where org_id = :org_id
             order by created_at desc;
@@ -1916,7 +1885,7 @@ def list_workflow_templates(
     else:
         stmt = text(
             """
-            select template_id, name, description, context, steps, is_active, created_at, updated_at
+            select template_id, name, description, context, steps, workflow_definition, is_active, created_at, updated_at
             from workflow_templates
             where org_id = :org_id and is_active = true
             order by created_at desc;
@@ -1932,6 +1901,7 @@ def list_workflow_templates(
                 description=str(row["description"] or ""),
                 context=ExecuteContext(**(row["context"] or {})),
                 steps=[WorkflowTemplateStep(**item) for item in (row["steps"] or [])],
+                workflow_definition=dict(row["workflow_definition"] or {}),
                 is_active=bool(row["is_active"]),
                 created_at=row["created_at"],
                 updated_at=row["updated_at"],
@@ -1953,7 +1923,7 @@ def run_workflow_template(
     template = db.execute(
         text(
             """
-            select template_id, name, context, steps, is_active
+            select template_id, name, context, steps, workflow_definition, is_active
             from workflow_templates
             where org_id = :org_id and template_id = cast(:template_id as uuid)
             limit 1;
@@ -1969,12 +1939,13 @@ def run_workflow_template(
     base_context = ExecuteContext(**(template["context"] or {}))
     merged_context = _merge_context(base_context, payload.context_override)
     steps = [WorkflowStepIn(**item) for item in (template["steps"] or [])]
-
+    definition = dict(template["workflow_definition"] or {}) if template.get("workflow_definition") else _build_workflow_definition(steps)
     run_input = WorkflowExecuteIn(
         initial_message=payload.initial_message,
         session_id=payload.session_id,
         context=merged_context,
         steps=steps,
+        workflow_definition=definition,
     )
     try:
         result = execute_workflow(payload=run_input, db=db, x_org_id=org_id)

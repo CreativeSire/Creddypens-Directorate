@@ -99,6 +99,23 @@ CreddyPens is an AI workforce platform where organizations hire role-based AI ag
 ## 5) Latest major completed milestones
 
 ## 2026-02-20
+- Week 2 Day 8-10 completion (workflow system enhancement):
+  - Added workflow execution engine at `backend/app/workflows/engine.py` with:
+    - Definition validation
+    - Variable resolution (`{{var}}`)
+    - Conditional branching (`if/true/false`)
+    - Dynamic next-step routing
+  - Added workflow validation endpoint:
+    - `POST /v1/workflows/validate`
+  - Extended workflow API/models to support:
+    - Step IDs, conditions, set-var, explicit next links
+    - Persisted `workflow_definition` on templates
+  - Upgraded workflow builder UI:
+    - Step ID editing
+    - Condition editor (if/true/false)
+    - Variable capture field
+    - Step reorder controls (up/down)
+
 - Week 1 completion pass (feature build plan):
   - Memory system completed:
     - Added durable `agent_memories` table + indexes in `backend/app/schema.py`.

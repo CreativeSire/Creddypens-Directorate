@@ -11,9 +11,14 @@ type AgentOption = {
 };
 
 type WorkflowStepLocal = {
+  id: string;
   agent_code: string;
   message: string;
   use_previous_response: boolean;
+  if_expr: string;
+  next_true: string;
+  next_false: string;
+  set_var: string;
 };
 
 type WorkflowRunnerProps = {
@@ -33,7 +38,7 @@ export function WorkflowRunner({ orgId, agents }: WorkflowRunnerProps) {
   const [initialMessage, setInitialMessage] = useState("");
   const [sessionId, setSessionId] = useState(makeSessionId());
   const [steps, setSteps] = useState<WorkflowStepLocal[]>([
-    { agent_code: agents[0]?.code || "", message: "", use_previous_response: true },
+    { id: "step_1", agent_code: agents[0]?.code || "", message: "", use_previous_response: true, if_expr: "", next_true: "", next_false: "", set_var: "" },
   ]);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<WorkflowExecuteResponse | null>(null);
@@ -64,12 +69,51 @@ export function WorkflowRunner({ orgId, agents }: WorkflowRunnerProps) {
 
   const addStep = () => {
     if (!hasAgents) return;
-    setSteps((prev) => [...prev, { agent_code: agents[0]?.code || "", message: "", use_previous_response: true }]);
+    setSteps((prev) => [
+      ...prev,
+      {
+        id: `step_${prev.length + 1}`,
+        agent_code: agents[0]?.code || "",
+        message: "",
+        use_previous_response: true,
+        if_expr: "",
+        next_true: "",
+        next_false: "",
+        set_var: "",
+      },
+    ]);
   };
 
   const removeStep = (index: number) => {
     setSteps((prev) => prev.filter((_, idx) => idx !== index));
   };
+
+  const moveStep = (index: number, direction: -1 | 1) => {
+    setSteps((prev) => {
+      const target = index + direction;
+      if (target < 0 || target >= prev.length) return prev;
+      const next = [...prev];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  };
+
+  const buildWorkflowDefinition = () => ({
+    start_step_id: steps[0]?.id || "step_1",
+    steps: steps.map((step) => ({
+      id: step.id,
+      agent_code: step.agent_code,
+      input: step.message || "{{previous_response}}",
+      use_previous_response: step.use_previous_response,
+      conditions: {
+        if: step.if_expr || "",
+        true: step.next_true || "",
+        false: step.next_false || "",
+      },
+      next: "",
+      set_var: step.set_var || "",
+    })),
+  });
 
   const runWorkflow = async () => {
     if (!canRun || running) return;
@@ -93,10 +137,19 @@ export function WorkflowRunner({ orgId, agents }: WorkflowRunnerProps) {
             additional: { source: "workflow_runner_ui" },
           },
           steps: steps.map((step) => ({
+            id: step.id,
             agent_code: step.agent_code,
             message: step.message || null,
             use_previous_response: step.use_previous_response,
+            conditions: {
+              if: step.if_expr || "",
+              true: step.next_true || "",
+              false: step.next_false || "",
+            },
+            set_var: step.set_var || null,
+            next: null,
           })),
+          workflow_definition: buildWorkflowDefinition(),
         }),
       });
       const payload = (await res.json()) as WorkflowExecuteResponse | { detail?: string };
@@ -156,10 +209,19 @@ export function WorkflowRunner({ orgId, agents }: WorkflowRunnerProps) {
             additional: { source: "workflow_runner_ui_template" },
           },
           steps: steps.map((step) => ({
+            id: step.id,
             agent_code: step.agent_code,
             message: step.message || null,
             use_previous_response: step.use_previous_response,
+            conditions: {
+              if: step.if_expr || "",
+              true: step.next_true || "",
+              false: step.next_false || "",
+            },
+            set_var: step.set_var || null,
+            next: null,
           })),
+          workflow_definition: buildWorkflowDefinition(),
           is_active: true,
         }),
       });
@@ -284,6 +346,12 @@ export function WorkflowRunner({ orgId, agents }: WorkflowRunnerProps) {
                 ))}
               </select>
               <input
+                value={step.id}
+                onChange={(e) => updateStep(index, { id: e.target.value })}
+                placeholder="Step ID"
+                className="md:w-40 bg-[#00F0FF]/5 border border-[#00F0FF]/30 px-2 py-2 text-xs text-[#00F0FF] placeholder-[#00F0FF]/35 focus:outline-none focus:border-[#00F0FF]"
+              />
+              <input
                 value={step.message}
                 onChange={(e) => updateStep(index, { message: e.target.value })}
                 placeholder="Optional step instruction"
@@ -297,6 +365,20 @@ export function WorkflowRunner({ orgId, agents }: WorkflowRunnerProps) {
                 />
                 Use previous output
               </label>
+              <button
+                onClick={() => moveStep(index, -1)}
+                className="px-2 py-2 border border-[#00F0FF]/30 text-[#00F0FF] text-xs"
+                disabled={index === 0}
+              >
+                ↑
+              </button>
+              <button
+                onClick={() => moveStep(index, 1)}
+                className="px-2 py-2 border border-[#00F0FF]/30 text-[#00F0FF] text-xs"
+                disabled={index === steps.length - 1}
+              >
+                ↓
+              </button>
               {steps.length > 1 ? (
                 <button
                   onClick={() => removeStep(index)}
@@ -305,6 +387,32 @@ export function WorkflowRunner({ orgId, agents }: WorkflowRunnerProps) {
                   Remove
                 </button>
               ) : null}
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-2 mt-2">
+              <input
+                value={step.if_expr}
+                onChange={(e) => updateStep(index, { if_expr: e.target.value })}
+                placeholder="Condition (e.g. {{score}} > 80)"
+                className="bg-[#00F0FF]/5 border border-[#00F0FF]/20 px-2 py-2 text-xs text-[#00F0FF] placeholder-[#00F0FF]/35"
+              />
+              <input
+                value={step.next_true}
+                onChange={(e) => updateStep(index, { next_true: e.target.value })}
+                placeholder="Next on TRUE (step id)"
+                className="bg-[#00F0FF]/5 border border-[#00F0FF]/20 px-2 py-2 text-xs text-[#00F0FF] placeholder-[#00F0FF]/35"
+              />
+              <input
+                value={step.next_false}
+                onChange={(e) => updateStep(index, { next_false: e.target.value })}
+                placeholder="Next on FALSE (step id)"
+                className="bg-[#00F0FF]/5 border border-[#00F0FF]/20 px-2 py-2 text-xs text-[#00F0FF] placeholder-[#00F0FF]/35"
+              />
+              <input
+                value={step.set_var}
+                onChange={(e) => updateStep(index, { set_var: e.target.value })}
+                placeholder="Save response to var"
+                className="bg-[#00F0FF]/5 border border-[#00F0FF]/20 px-2 py-2 text-xs text-[#00F0FF] placeholder-[#00F0FF]/35"
+              />
             </div>
           </div>
         ))}

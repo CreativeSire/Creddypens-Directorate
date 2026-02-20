@@ -66,9 +66,13 @@ export type ExecuteResponse = {
 };
 
 export type WorkflowStepRequest = {
+  id?: string | null;
   agent_code: string;
   message?: string | null;
   use_previous_response?: boolean;
+  conditions?: Record<string, string>;
+  next?: string | null;
+  set_var?: string | null;
 };
 
 export type WorkflowExecuteRequest = {
@@ -76,10 +80,12 @@ export type WorkflowExecuteRequest = {
   session_id?: string | null;
   context: ExecuteRequest["context"];
   steps: WorkflowStepRequest[];
+  workflow_definition?: Record<string, unknown>;
 };
 
 export type WorkflowStepResponse = {
   step_index: number;
+  step_id?: string | null;
   agent_code: string;
   input_message: string;
   response: string;
@@ -103,6 +109,7 @@ export type WorkflowTemplate = {
   description: string;
   context: ExecuteRequest["context"];
   steps: WorkflowTemplateStep[];
+  workflow_definition?: Record<string, unknown>;
   is_active: boolean;
   created_at: string;
   updated_at: string;
