@@ -1465,6 +1465,41 @@ class WebhookTestIn(BaseModel):
     headers: dict = Field(default_factory=dict)
 
 
+class TaskCreateIn(BaseModel):
+    task_title: str = Field(min_length=2, max_length=240)
+    task_description: str = Field(default="", max_length=4000)
+    agent_code: str | None = Field(default=None, max_length=64)
+    priority: str = Field(default="medium", max_length=16)
+    assigned_to: str | None = Field(default=None, max_length=120)
+    created_by: str = Field(default="user", max_length=120)
+
+
+class TaskOut(BaseModel):
+    task_id: str
+    org_id: str
+    agent_code: str | None = None
+    task_title: str
+    task_description: str
+    status: str
+    priority: str
+    assigned_to: str | None = None
+    created_by: str
+    result: str
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
+
+class TaskStatusIn(BaseModel):
+    status: str = Field(min_length=4, max_length=20)
+    result: str | None = Field(default=None, max_length=8000)
+
+
+class TaskAssignIn(BaseModel):
+    assigned_to: str = Field(min_length=1, max_length=120)
+
+
 def _sse_frame(event: str, payload: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(payload)}\n\n"
 
@@ -1753,6 +1788,130 @@ def test_webhook(payload: WebhookTestIn) -> dict:
         headers={str(key): str(value) for key, value in payload.headers.items()},
     )
     return {"ok": True, "result": result}
+
+
+@router.get("/v1/organizations/{org_id}/inbox", response_model=list[TaskOut])
+def list_inbox_tasks(
+    org_id: str,
+    status: str | None = None,
+    agent_code: str | None = None,
+    assigned_to: str | None = None,
+    priority: str | None = None,
+    q: str | None = None,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+) -> list[TaskOut]:
+    cap = max(1, min(int(limit), 500))
+    sql = """
+      select task_id, org_id, agent_code, task_title, task_description, status, priority, assigned_to, created_by, result, created_at, updated_at, started_at, completed_at
+      from task_inbox
+      where org_id = :org_id
+    """
+    params: dict[str, object] = {"org_id": org_id, "limit": cap}
+    if status:
+        sql += " and status = :status"
+        params["status"] = status.strip().lower()
+    if agent_code:
+        sql += " and coalesce(agent_code,'') = :agent_code"
+        params["agent_code"] = agent_code.strip()
+    if assigned_to:
+        sql += " and coalesce(assigned_to,'') = :assigned_to"
+        params["assigned_to"] = assigned_to.strip()
+    if priority:
+        sql += " and priority = :priority"
+        params["priority"] = priority.strip().lower()
+    if q and q.strip():
+        sql += " and (task_title ilike :q or task_description ilike :q)"
+        params["q"] = f"%{q.strip()}%"
+    sql += " order by updated_at desc limit :limit"
+    rows = db.execute(text(sql), params).mappings().all()
+    return [TaskOut(**{**dict(row), "task_id": str(row["task_id"])}) for row in rows]
+
+
+@router.post("/v1/organizations/{org_id}/inbox", response_model=TaskOut)
+def create_inbox_task(org_id: str, payload: TaskCreateIn, db: Session = Depends(get_db)) -> TaskOut:
+    normalized_priority = payload.priority.strip().lower()
+    if normalized_priority not in {"low", "medium", "high", "urgent"}:
+        normalized_priority = "medium"
+
+    db.execute(
+        text("insert into organizations (org_id, name) values (:org_id, :name) on conflict (org_id) do nothing"),
+        {"org_id": org_id, "name": ""},
+    )
+    row = db.execute(
+        text(
+            """
+            insert into task_inbox
+              (org_id, agent_code, task_title, task_description, status, priority, assigned_to, created_by, result, created_at, updated_at)
+            values
+              (:org_id, nullif(:agent_code,''), :task_title, :task_description, 'pending', :priority, nullif(:assigned_to,''), :created_by, '', now(), now())
+            returning task_id, org_id, agent_code, task_title, task_description, status, priority, assigned_to, created_by, result, created_at, updated_at, started_at, completed_at;
+            """
+        ),
+        {
+            "org_id": org_id,
+            "agent_code": payload.agent_code or "",
+            "task_title": payload.task_title.strip(),
+            "task_description": payload.task_description.strip(),
+            "priority": normalized_priority,
+            "assigned_to": payload.assigned_to or "",
+            "created_by": payload.created_by.strip() or "user",
+        },
+    ).mappings().first()
+    db.commit()
+    if not row:
+        raise HTTPException(status_code=500, detail="Failed to create task")
+    return TaskOut(**{**dict(row), "task_id": str(row["task_id"])})
+
+
+@router.put("/v1/inbox/tasks/{task_id}/status", response_model=TaskOut)
+def update_inbox_task_status(task_id: str, payload: TaskStatusIn, db: Session = Depends(get_db)) -> TaskOut:
+    next_status = payload.status.strip().lower()
+    if next_status not in {"pending", "in_progress", "completed"}:
+        raise HTTPException(status_code=400, detail="status must be pending|in_progress|completed")
+    row = db.execute(
+        text(
+            """
+            update task_inbox
+            set
+              status = :status,
+              result = coalesce(:result, result),
+              started_at = case when :status = 'in_progress' and started_at is null then now() else started_at end,
+              completed_at = case when :status = 'completed' then now() when :status <> 'completed' then null else completed_at end,
+              updated_at = now()
+            where task_id = cast(:task_id as uuid)
+            returning task_id, org_id, agent_code, task_title, task_description, status, priority, assigned_to, created_by, result, created_at, updated_at, started_at, completed_at;
+            """
+        ),
+        {
+            "task_id": task_id,
+            "status": next_status,
+            "result": payload.result.strip() if payload.result else None,
+        },
+    ).mappings().first()
+    db.commit()
+    if not row:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return TaskOut(**{**dict(row), "task_id": str(row["task_id"])})
+
+
+@router.put("/v1/inbox/tasks/{task_id}/assign", response_model=TaskOut)
+def assign_inbox_task(task_id: str, payload: TaskAssignIn, db: Session = Depends(get_db)) -> TaskOut:
+    row = db.execute(
+        text(
+            """
+            update task_inbox
+            set assigned_to = :assigned_to, updated_at = now()
+            where task_id = cast(:task_id as uuid)
+            returning task_id, org_id, agent_code, task_title, task_description, status, priority, assigned_to, created_by, result, created_at, updated_at, started_at, completed_at;
+            """
+        ),
+        {"task_id": task_id, "assigned_to": payload.assigned_to.strip()},
+    ).mappings().first()
+    db.commit()
+    if not row:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return TaskOut(**{**dict(row), "task_id": str(row["task_id"])})
 
 
 class WorkflowStepIn(BaseModel):

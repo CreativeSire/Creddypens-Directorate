@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
-import { Briefcase, GraduationCap, Home, LogOut, Menu, Users, X } from "lucide-react";
+import { Briefcase, ClipboardList, GraduationCap, Home, LogOut, Menu, Users, X } from "lucide-react";
 
 import { supabase } from "@/lib/supabase";
 import { toast } from "@/lib/toast";
@@ -13,6 +13,7 @@ const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: Home },
   { href: "/dashboard/departments/customer-experience", label: "Departments", icon: Briefcase },
   { href: "/dashboard/my-agents", label: "My Agents", icon: Users },
+  { href: "/dashboard/inbox", label: "Inbox", icon: ClipboardList },
   { href: "/dashboard/academy", label: "The Academy", icon: GraduationCap },
 ];
 
@@ -99,4 +100,3 @@ export function MobileNav() {
     </>
   );
 }
-

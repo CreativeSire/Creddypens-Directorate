@@ -288,6 +288,27 @@ def ensure_schema(engine: Engine) -> None:
     create index if not exists idx_integration_configs_org on integration_configs(org_id, created_at desc);
     create index if not exists idx_integration_configs_type on integration_configs(org_id, integration_type, is_active);
 
+    -- Organization-wide task inbox for team collaboration
+    create table if not exists task_inbox (
+      task_id uuid primary key default gen_random_uuid(),
+      org_id text not null references organizations(org_id) on delete cascade,
+      agent_code text references agent_catalog(code) on delete set null,
+      task_title text not null,
+      task_description text not null default '',
+      status text not null default 'pending',
+      priority text not null default 'medium',
+      assigned_to text,
+      created_by text not null default 'system',
+      result text not null default '',
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      started_at timestamptz,
+      completed_at timestamptz
+    );
+    create index if not exists idx_task_inbox_org_status on task_inbox(org_id, status, updated_at desc);
+    create index if not exists idx_task_inbox_org_assignee on task_inbox(org_id, assigned_to, updated_at desc);
+    create index if not exists idx_task_inbox_org_agent on task_inbox(org_id, agent_code, updated_at desc);
+
     -- Internal knowledge base for document retrieval
     create table if not exists knowledge_base (
       id uuid primary key default gen_random_uuid(),

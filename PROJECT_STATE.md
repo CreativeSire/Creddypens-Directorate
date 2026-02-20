@@ -99,6 +99,20 @@ CreddyPens is an AI workforce platform where organizations hire role-based AI ag
 ## 5) Latest major completed milestones
 
 ## 2026-02-20
+- Week 3 Day 15-17 completion (org-wide task inbox):
+  - Added `task_inbox` table + indexes in `backend/app/schema.py`.
+  - Added task inbox API endpoints:
+    - `GET /v1/organizations/{org_id}/inbox`
+    - `POST /v1/organizations/{org_id}/inbox`
+    - `PUT /v1/inbox/tasks/{task_id}/status`
+    - `PUT /v1/inbox/tasks/{task_id}/assign`
+  - Added task board UI with Kanban-style columns and drag-drop status updates:
+    - `frontend/src/components/inbox/task-board.tsx`
+    - `frontend/src/app/dashboard/inbox/page.tsx`
+  - Added inbox navigation links:
+    - `frontend/src/components/navigation/sidebar.tsx`
+    - `frontend/src/components/layout/mobile-nav.tsx`
+
 - Week 2 Day 13-14 completion (generic webhooks):
   - Added webhook integration service with retry + exponential backoff:
     - `backend/app/integrations/webhook.py`

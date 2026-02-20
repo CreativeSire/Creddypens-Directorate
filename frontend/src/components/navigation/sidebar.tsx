@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { BookOpen, GraduationCap, LayoutDashboard, Settings, Users, ChevronDown } from "lucide-react";
+import { BookOpen, ClipboardList, GraduationCap, LayoutDashboard, Settings, Users, ChevronDown } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { getOrgId } from "@/lib/org";
@@ -152,6 +152,7 @@ export default function Sidebar({
         ) : null}
 
         {navItem("/dashboard/my-agents", "My Agents", Users)}
+        {navItem("/dashboard/inbox", "Task Inbox", ClipboardList)}
         {navItem("/dashboard/academy", "The Academy", GraduationCap)}
         {navItem("/dashboard/settings", "Settings", Settings)}
       </div>
