@@ -275,6 +275,19 @@ def ensure_schema(engine: Engine) -> None:
     create index if not exists idx_uploaded_files_org on uploaded_files(org_id, uploaded_at desc);
     create index if not exists idx_uploaded_files_active on uploaded_files(org_id, is_active);
 
+    -- External integration configs per organization
+    create table if not exists integration_configs (
+      integration_id uuid primary key default gen_random_uuid(),
+      org_id text not null references organizations(org_id) on delete cascade,
+      integration_type text not null,
+      config jsonb not null default '{}'::jsonb,
+      is_active boolean not null default true,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    );
+    create index if not exists idx_integration_configs_org on integration_configs(org_id, created_at desc);
+    create index if not exists idx_integration_configs_type on integration_configs(org_id, integration_type, is_active);
+
     -- Internal knowledge base for document retrieval
     create table if not exists knowledge_base (
       id uuid primary key default gen_random_uuid(),

@@ -99,6 +99,23 @@ CreddyPens is an AI workforce platform where organizations hire role-based AI ag
 ## 5) Latest major completed milestones
 
 ## 2026-02-20
+- Week 2 Day 11-12 completion (Slack + Email integrations):
+  - Added `integration_configs` table in `backend/app/schema.py`.
+  - Added integration service modules:
+    - `backend/app/integrations/slack.py`
+    - `backend/app/integrations/email.py`
+  - Added integration API endpoints:
+    - `POST /v1/organizations/{org_id}/integrations`
+    - `GET /v1/organizations/{org_id}/integrations`
+    - `DELETE /v1/integrations/{integration_id}`
+    - `POST /v1/integrations/{integration_id}/test`
+  - Workflow actions support added:
+    - Steps now support `action`, `integration_id`, and `action_config`.
+    - Engine can execute Slack and Email actions as workflow steps.
+  - Added integrations UI in settings:
+    - `frontend/src/components/settings/integrations.tsx`
+    - Wired into `frontend/src/app/dashboard/settings/page.tsx`
+
 - Week 2 Day 8-10 completion (workflow system enhancement):
   - Added workflow execution engine at `backend/app/workflows/engine.py` with:
     - Definition validation

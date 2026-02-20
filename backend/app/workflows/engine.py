@@ -10,6 +10,8 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.agents.prompts import inject_domain_block, system_prompt_for_agent
+from app.integrations.email import email_integration
+from app.integrations.slack import slack_integration
 from app.llm.litellm_client import LLMError, execute_via_litellm
 from app.models import AgentCatalog, HiredAgent
 from app.schemas_execute import ExecuteContext
@@ -138,6 +140,9 @@ class WorkflowEngine:
                 break
             step_index = len(results) + 1
             agent_code = str(step.get("agent_code") or "").strip()
+            action = str(step.get("action") or "").strip().lower()
+            action_config = dict(step.get("action_config") or {})
+            integration_id = str(step.get("integration_id") or "").strip()
             agent = self.db.execute(select(AgentCatalog).where(AgentCatalog.code == agent_code)).scalars().first()
             if not agent:
                 raise HTTPException(status_code=404, detail=f"Agent not found in workflow step {step_index}: {agent_code}")
@@ -162,26 +167,40 @@ class WorkflowEngine:
             if not input_message:
                 input_message = str(variables.get("previous_response") or initial_message)
 
-            system_prompt = (agent.system_prompt or "").strip() or system_prompt_for_agent(agent_code)
-            system_prompt = inject_domain_block(system_prompt, agent)
             trace_id = str(uuid.uuid4())
-            try:
-                result = execute_via_litellm(
-                    provider=agent.llm_provider or "",
-                    model=agent.llm_model or "",
-                    system=system_prompt,
-                    user=input_message,
-                    trace_id=trace_id,
-                    enable_search=bool(context.web_search),
-                    enable_docs=bool(context.doc_retrieval),
-                    org_id=org_id,
-                    session_id=session_id,
-                    agent_code=agent_code,
+            if action in {"slack", "email"}:
+                response_text = self._execute_integration_action(
+                    action=action,
+                    integration_id=integration_id,
+                    input_message=input_message,
+                    action_config=action_config,
                 )
-            except LLMError as exc:
-                raise HTTPException(status_code=503, detail=f"Workflow step {step_index} failed: {exc}") from exc
-
-            response_text = result.get("response") or result.get("content") or result.get("text") or ""
+                result = {
+                    "response": response_text,
+                    "model_used": f"workflow/{action}",
+                    "latency_ms": 0,
+                    "tokens_used": 0,
+                    "trace_id": trace_id,
+                }
+            else:
+                system_prompt = (agent.system_prompt or "").strip() or system_prompt_for_agent(agent_code)
+                system_prompt = inject_domain_block(system_prompt, agent)
+                try:
+                    result = execute_via_litellm(
+                        provider=agent.llm_provider or "",
+                        model=agent.llm_model or "",
+                        system=system_prompt,
+                        user=input_message,
+                        trace_id=trace_id,
+                        enable_search=bool(context.web_search),
+                        enable_docs=bool(context.doc_retrieval),
+                        org_id=org_id,
+                        session_id=session_id,
+                        agent_code=agent_code,
+                    )
+                except LLMError as exc:
+                    raise HTTPException(status_code=503, detail=f"Workflow step {step_index} failed: {exc}") from exc
+                response_text = result.get("response") or result.get("content") or result.get("text") or ""
             variables["previous_response"] = response_text
             set_var = str(step.get("set_var") or "").strip()
             if set_var:
@@ -236,3 +255,67 @@ class WorkflowEngine:
             )
 
         return str(variables.get("previous_response") or initial_message), results
+
+    def _execute_integration_action(
+        self,
+        *,
+        action: str,
+        integration_id: str,
+        input_message: str,
+        action_config: dict[str, Any],
+    ) -> str:
+        if not integration_id:
+            raise HTTPException(status_code=400, detail=f"Workflow action '{action}' requires integration_id")
+        row = self.db.execute(
+            text(
+                """
+                select integration_type, config, is_active
+                from integration_configs
+                where integration_id = cast(:integration_id as uuid)
+                limit 1;
+                """
+            ),
+            {"integration_id": integration_id},
+        ).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Integration not found: {integration_id}")
+        if not bool(row["is_active"]):
+            raise HTTPException(status_code=409, detail=f"Integration inactive: {integration_id}")
+        config = dict(row["config"] or {})
+        integration_type = str(row["integration_type"]).strip().lower()
+
+        if action == "slack":
+            if integration_type != "slack":
+                raise HTTPException(status_code=400, detail=f"Integration {integration_id} is not slack")
+            webhook_url = str(config.get("webhook_url") or "")
+            text_value = str(action_config.get("text") or input_message)
+            slack_integration.post_message(webhook_url=webhook_url, text=text_value)
+            return f"Slack message sent ({len(text_value)} chars)"
+
+        if action == "email":
+            if integration_type != "email":
+                raise HTTPException(status_code=400, detail=f"Integration {integration_id} is not email")
+            smtp_host = str(config.get("smtp_host") or "")
+            smtp_port = int(config.get("smtp_port") or 587)
+            smtp_user = str(config.get("smtp_user") or "")
+            smtp_password = str(config.get("smtp_password") or "")
+            from_email = str(config.get("from_email") or smtp_user)
+            to_email = str(action_config.get("to_email") or config.get("default_to") or "")
+            if not to_email:
+                raise HTTPException(status_code=400, detail="Email workflow action requires to_email")
+            subject = str(action_config.get("subject") or "CreddyPens workflow notification")
+            body = str(action_config.get("body") or input_message)
+            email_integration.send_email_sync(
+                smtp_host=smtp_host,
+                smtp_port=smtp_port,
+                smtp_user=smtp_user,
+                smtp_password=smtp_password,
+                from_email=from_email,
+                to_email=to_email,
+                subject=subject,
+                body=body,
+                use_tls=bool(config.get("use_tls", True)),
+            )
+            return f"Email sent to {to_email}"
+
+        raise HTTPException(status_code=400, detail=f"Unsupported workflow action: {action}")

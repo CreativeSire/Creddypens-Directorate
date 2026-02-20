@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { MemoryManager } from "@/components/settings/memory-manager";
+import { IntegrationsManager } from "@/components/settings/integrations";
 import { getOrgId } from "@/lib/org";
 
 export default function SettingsPage() {
@@ -30,6 +31,7 @@ export default function SettingsPage() {
         <p className="text-sm text-[#00F0FF]/60 mt-2">Store and manage reusable context for your agents.</p>
       </div>
       <MemoryManager orgId={orgId} />
+      <IntegrationsManager orgId={orgId} />
     </div>
   );
 }

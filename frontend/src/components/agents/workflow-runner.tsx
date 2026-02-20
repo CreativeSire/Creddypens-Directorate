@@ -19,6 +19,9 @@ type WorkflowStepLocal = {
   next_true: string;
   next_false: string;
   set_var: string;
+  action: "" | "slack" | "email";
+  integration_id: string;
+  action_payload: string;
 };
 
 type WorkflowRunnerProps = {
@@ -38,7 +41,19 @@ export function WorkflowRunner({ orgId, agents }: WorkflowRunnerProps) {
   const [initialMessage, setInitialMessage] = useState("");
   const [sessionId, setSessionId] = useState(makeSessionId());
   const [steps, setSteps] = useState<WorkflowStepLocal[]>([
-    { id: "step_1", agent_code: agents[0]?.code || "", message: "", use_previous_response: true, if_expr: "", next_true: "", next_false: "", set_var: "" },
+    {
+      id: "step_1",
+      agent_code: agents[0]?.code || "",
+      message: "",
+      use_previous_response: true,
+      if_expr: "",
+      next_true: "",
+      next_false: "",
+      set_var: "",
+      action: "",
+      integration_id: "",
+      action_payload: "",
+    },
   ]);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<WorkflowExecuteResponse | null>(null);
@@ -80,6 +95,9 @@ export function WorkflowRunner({ orgId, agents }: WorkflowRunnerProps) {
         next_true: "",
         next_false: "",
         set_var: "",
+        action: "",
+        integration_id: "",
+        action_payload: "",
       },
     ]);
   };
@@ -112,6 +130,17 @@ export function WorkflowRunner({ orgId, agents }: WorkflowRunnerProps) {
       },
       next: "",
       set_var: step.set_var || "",
+      action: step.action || null,
+      integration_id: step.integration_id || null,
+      action_config: step.action_payload.trim()
+        ? (() => {
+            try {
+              return JSON.parse(step.action_payload);
+            } catch {
+              return {};
+            }
+          })()
+        : {},
     })),
   });
 
@@ -148,6 +177,17 @@ export function WorkflowRunner({ orgId, agents }: WorkflowRunnerProps) {
             },
             set_var: step.set_var || null,
             next: null,
+            action: step.action || null,
+            integration_id: step.integration_id || null,
+            action_config: step.action_payload.trim()
+              ? (() => {
+                  try {
+                    return JSON.parse(step.action_payload);
+                  } catch {
+                    return {};
+                  }
+                })()
+              : {},
           })),
           workflow_definition: buildWorkflowDefinition(),
         }),
@@ -220,6 +260,17 @@ export function WorkflowRunner({ orgId, agents }: WorkflowRunnerProps) {
             },
             set_var: step.set_var || null,
             next: null,
+            action: step.action || null,
+            integration_id: step.integration_id || null,
+            action_config: step.action_payload.trim()
+              ? (() => {
+                  try {
+                    return JSON.parse(step.action_payload);
+                  } catch {
+                    return {};
+                  }
+                })()
+              : {},
           })),
           workflow_definition: buildWorkflowDefinition(),
           is_active: true,
@@ -411,6 +462,29 @@ export function WorkflowRunner({ orgId, agents }: WorkflowRunnerProps) {
                 value={step.set_var}
                 onChange={(e) => updateStep(index, { set_var: e.target.value })}
                 placeholder="Save response to var"
+                className="bg-[#00F0FF]/5 border border-[#00F0FF]/20 px-2 py-2 text-xs text-[#00F0FF] placeholder-[#00F0FF]/35"
+              />
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mt-2">
+              <select
+                value={step.action}
+                onChange={(e) => updateStep(index, { action: e.target.value as WorkflowStepLocal["action"] })}
+                className="bg-[#00F0FF]/5 border border-[#00F0FF]/20 px-2 py-2 text-xs text-[#00F0FF]"
+              >
+                <option value="">Action: LLM</option>
+                <option value="slack">Action: Slack</option>
+                <option value="email">Action: Email</option>
+              </select>
+              <input
+                value={step.integration_id}
+                onChange={(e) => updateStep(index, { integration_id: e.target.value })}
+                placeholder="Integration ID (for action)"
+                className="bg-[#00F0FF]/5 border border-[#00F0FF]/20 px-2 py-2 text-xs text-[#00F0FF] placeholder-[#00F0FF]/35"
+              />
+              <input
+                value={step.action_payload}
+                onChange={(e) => updateStep(index, { action_payload: e.target.value })}
+                placeholder='Action JSON (e.g. {"to_email":"x@x.com"})'
                 className="bg-[#00F0FF]/5 border border-[#00F0FF]/20 px-2 py-2 text-xs text-[#00F0FF] placeholder-[#00F0FF]/35"
               />
             </div>

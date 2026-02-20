@@ -73,6 +73,9 @@ export type WorkflowStepRequest = {
   conditions?: Record<string, string>;
   next?: string | null;
   set_var?: string | null;
+  action?: string | null;
+  integration_id?: string | null;
+  action_config?: Record<string, unknown>;
 };
 
 export type WorkflowExecuteRequest = {

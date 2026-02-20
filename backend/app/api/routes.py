@@ -15,6 +15,8 @@ from sqlalchemy.orm import Session
 
 from app.agents.prompts import inject_domain_block, system_prompt_for_agent
 from app.db import SessionLocal, get_db
+from app.integrations.email import email_integration
+from app.integrations.slack import slack_integration
 from app.llm.litellm_client import LLMError, execute_via_litellm
 from app.memory.extractor import memory_extractor
 from app.llm.multi_router import get_multi_llm_router
@@ -1436,6 +1438,26 @@ class ToolRunIn(BaseModel):
     args: dict = Field(default_factory=dict)
 
 
+class IntegrationConfigIn(BaseModel):
+    integration_type: str = Field(min_length=1, max_length=64)
+    config: dict = Field(default_factory=dict)
+    is_active: bool = True
+
+
+class IntegrationConfigOut(BaseModel):
+    integration_id: str
+    org_id: str
+    integration_type: str
+    config: dict
+    is_active: bool
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class IntegrationTestIn(BaseModel):
+    payload: dict = Field(default_factory=dict)
+
+
 def _sse_frame(event: str, payload: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(payload)}\n\n"
 
@@ -1591,6 +1613,121 @@ def upsert_model_policy(
     return {"ok": True}
 
 
+@router.post("/v1/organizations/{org_id}/integrations", response_model=IntegrationConfigOut)
+def create_integration_config(org_id: str, payload: IntegrationConfigIn, db: Session = Depends(get_db)) -> IntegrationConfigOut:
+    db.execute(
+        text("insert into organizations (org_id, name) values (:org_id, :name) on conflict (org_id) do nothing"),
+        {"org_id": org_id, "name": ""},
+    )
+    row = db.execute(
+        text(
+            """
+            insert into integration_configs (org_id, integration_type, config, is_active, created_at, updated_at)
+            values (:org_id, :integration_type, cast(:config as jsonb), :is_active, now(), now())
+            returning integration_id, org_id, integration_type, config, is_active, created_at, updated_at;
+            """
+        ),
+        {
+            "org_id": org_id,
+            "integration_type": payload.integration_type.strip().lower(),
+            "config": json.dumps(payload.config),
+            "is_active": payload.is_active,
+        },
+    ).mappings().first()
+    db.commit()
+    if not row:
+        raise HTTPException(status_code=500, detail="Failed to create integration config")
+    return IntegrationConfigOut(**dict(row))
+
+
+@router.get("/v1/organizations/{org_id}/integrations", response_model=list[IntegrationConfigOut])
+def list_integrations(org_id: str, include_inactive: bool = False, db: Session = Depends(get_db)) -> list[IntegrationConfigOut]:
+    sql = """
+      select integration_id, org_id, integration_type, config, is_active, created_at, updated_at
+      from integration_configs
+      where org_id = :org_id
+    """
+    if not include_inactive:
+        sql += " and is_active = true"
+    sql += " order by created_at desc"
+    rows = db.execute(text(sql), {"org_id": org_id}).mappings().all()
+    return [IntegrationConfigOut(**dict(row)) for row in rows]
+
+
+@router.delete("/v1/integrations/{integration_id}")
+def delete_integration(integration_id: str, db: Session = Depends(get_db)) -> dict:
+    changed = db.execute(
+        text(
+            """
+            update integration_configs
+            set is_active = false, updated_at = now()
+            where integration_id = cast(:integration_id as uuid);
+            """
+        ),
+        {"integration_id": integration_id},
+    ).rowcount
+    db.commit()
+    if not changed:
+        raise HTTPException(status_code=404, detail="Integration not found")
+    return {"ok": True, "integration_id": integration_id}
+
+
+@router.post("/v1/integrations/{integration_id}/test")
+async def test_integration(integration_id: str, payload: IntegrationTestIn, db: Session = Depends(get_db)) -> dict:
+    row = db.execute(
+        text(
+            """
+            select integration_type, config, is_active
+            from integration_configs
+            where integration_id = cast(:integration_id as uuid)
+            limit 1;
+            """
+        ),
+        {"integration_id": integration_id},
+    ).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Integration not found")
+    if not bool(row["is_active"]):
+        raise HTTPException(status_code=409, detail="Integration is inactive")
+
+    integration_type = str(row["integration_type"])
+    config = dict(row["config"] or {})
+
+    if integration_type == "slack":
+        webhook_url = str(config.get("webhook_url") or "")
+        result = slack_integration.post_message(
+            webhook_url=webhook_url,
+            text=str(payload.payload.get("text") or "CreddyPens integration test message"),
+        )
+        return {"ok": True, "integration_type": "slack", "result": result}
+
+    if integration_type == "email":
+        smtp_host = str(config.get("smtp_host") or "")
+        smtp_port = int(config.get("smtp_port") or 587)
+        smtp_user = str(config.get("smtp_user") or "")
+        smtp_password = str(config.get("smtp_password") or "")
+        from_email = str(config.get("from_email") or smtp_user)
+        to_email = str(payload.payload.get("to_email") or config.get("test_recipient") or "")
+        subject = str(payload.payload.get("subject") or "CreddyPens integration test")
+        body = str(payload.payload.get("body") or "This is a connectivity test from CreddyPens.")
+        if not to_email:
+            raise HTTPException(status_code=400, detail="Missing to_email in test payload or config.test_recipient")
+        result = await email_integration.send_email(
+            smtp_host=smtp_host,
+            smtp_port=smtp_port,
+            smtp_user=smtp_user,
+            smtp_password=smtp_password,
+            from_email=from_email,
+            to_email=to_email,
+            subject=subject,
+            body=body,
+            use_tls=bool(config.get("use_tls", True)),
+        )
+        return {"ok": True, "integration_type": "email", "result": result}
+
+    raise HTTPException(status_code=400, detail=f"Unsupported integration_type: {integration_type}")
+
+
 class WorkflowStepIn(BaseModel):
     id: str | None = Field(default=None, min_length=1, max_length=64)
     agent_code: str = Field(min_length=1, max_length=64)
@@ -1599,6 +1736,9 @@ class WorkflowStepIn(BaseModel):
     conditions: dict[str, str] = Field(default_factory=dict)
     next: str | None = Field(default=None, max_length=64)
     set_var: str | None = Field(default=None, max_length=64)
+    action: str | None = Field(default=None, max_length=32)
+    integration_id: str | None = Field(default=None, max_length=64)
+    action_config: dict = Field(default_factory=dict)
 
 
 class WorkflowExecuteIn(BaseModel):
@@ -1635,6 +1775,9 @@ class WorkflowTemplateStep(BaseModel):
     conditions: dict[str, str] = Field(default_factory=dict)
     next: str | None = Field(default=None, max_length=64)
     set_var: str | None = Field(default=None, max_length=64)
+    action: str | None = Field(default=None, max_length=32)
+    integration_id: str | None = Field(default=None, max_length=64)
+    action_config: dict = Field(default_factory=dict)
 
 
 class WorkflowTemplateIn(BaseModel):
@@ -1742,6 +1885,9 @@ def _build_workflow_definition(steps: list[WorkflowStepIn]) -> dict:
                 "conditions": dict(step.conditions or {}),
                 "next": (step.next or "").strip() or None,
                 "set_var": (step.set_var or "").strip() or None,
+                "action": (step.action or "").strip() or None,
+                "integration_id": (step.integration_id or "").strip() or None,
+                "action_config": dict(step.action_config or {}),
             }
         )
     return {"start_step_id": built_steps[0]["id"] if built_steps else None, "steps": built_steps}
