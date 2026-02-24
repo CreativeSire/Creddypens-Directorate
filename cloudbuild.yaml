@@ -1,6 +1,6 @@
 options:
   logging: CLOUD_LOGGING_ONLY
-
+  defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
 steps:
   # Build and push Backend
   - name: 'gcr.io/cloud-builders/docker'
