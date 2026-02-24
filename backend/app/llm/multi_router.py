@@ -95,7 +95,7 @@ class BaseProvider:
         self.provider_name = provider_name
         self.default_model = default_model
 
-    def execute(self, *, model: str | None, system: str, user: str, trace_id: str) -> dict[str, Any]:
+    async def execute(self, *, model: str | None, system: str, user: str, trace_id: str) -> dict[str, Any]:
         model_used = _normalize_model(self.provider_name, (model or self.default_model))
         if settings.llm_mock:
             start = time.perf_counter()
@@ -110,7 +110,7 @@ class BaseProvider:
             }
 
         try:
-            from litellm import completion  # type: ignore[import-not-found]
+            from litellm import acompletion  # type: ignore[import-not-found]
         except Exception as e:  # pragma: no cover
             raise MultiLLMError("litellm is not installed. Run: pip install -r requirements.txt") from e
 
@@ -118,9 +118,11 @@ class BaseProvider:
         retries = max(0, int(settings.litellm_retries))
         resp: Any = None
         last_error: Exception | None = None
+        
+        import asyncio
         for attempt in range(retries + 1):
             try:
-                resp = completion(
+                resp = await acompletion(
                     model=model_used,
                     messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
                     metadata={"trace_id": trace_id},
@@ -132,7 +134,8 @@ class BaseProvider:
                 last_error = e
                 if attempt >= retries or not _is_retryable_error(e):
                     break
-                time.sleep(min(1.5, 0.35 * (attempt + 1)))
+                # Non-blocking sleep
+                await asyncio.sleep(min(1.5, 0.35 * (attempt + 1)))
 
         if last_error is not None:
             msg = str(last_error).strip()
@@ -347,7 +350,7 @@ class SmartMultiLLMRouter:
         model_used = _normalize_model(provider, model)
         return provider, model_used, level, score
 
-    def execute(self, req: LLMRequest) -> dict[str, Any]:
+    async def execute(self, req: LLMRequest) -> dict[str, Any]:
         provider_name, model_used, route_level, complexity_score = self._choose(req)
         provider = self.providers.get(provider_name)
         if provider is None:
@@ -365,7 +368,7 @@ class SmartMultiLLMRouter:
                 self.cost.track(model_used=model_used, tokens=int(cached.get("tokens_used") or 0), cache_hit=True)
                 return cached
 
-        result = provider.execute(
+        result = await provider.execute(
             model=model_used,
             system=req.system,
             user=req.user,

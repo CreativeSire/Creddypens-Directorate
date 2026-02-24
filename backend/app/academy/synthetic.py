@@ -42,11 +42,6 @@ class SyntheticTrainer:
         agent_code: str,
         conversation_count: int = 100,
     ) -> dict[str, Any]:
-        return await anyio.to_thread.run_sync(
-            lambda: self._train_agent_sync(agent_code=agent_code, conversation_count=conversation_count)
-        )
-
-    def _train_agent_sync(self, *, agent_code: str, conversation_count: int) -> dict[str, Any]:
         conversation_count = max(1, min(500, int(conversation_count)))
         started = time.time()
 
@@ -117,7 +112,7 @@ class SyntheticTrainer:
 
                     try:
                         system = (agent.system_prompt or "").strip() or f"You are {agent.name}."
-                        agent_llm = execute_via_litellm(
+                        agent_llm = await execute_via_litellm(
                             provider=agent.llm_provider or "",
                             model=agent.llm_model or "",
                             system=system,
@@ -127,7 +122,7 @@ class SyntheticTrainer:
                         if not response_text:
                             raise LLMError("Agent returned an empty response.")
 
-                        evaluation = self.evaluator.evaluate_sync(
+                        evaluation = await self.evaluator.evaluate(
                             user_message=user_message,
                             agent_response=response_text,
                             agent_role=agent.name or agent.code,

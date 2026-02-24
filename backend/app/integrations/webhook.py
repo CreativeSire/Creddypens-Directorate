@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import time
+import asyncio
 from typing import Any
 
-import requests
+import aiohttp
 
 
 class WebhookIntegration:
-    def send_webhook(
+    async def send_webhook(
         self,
         *,
         url: str,
@@ -26,28 +26,31 @@ class WebhookIntegration:
 
         delay = 1.0
         last_error: Exception | None = None
-        for attempt in range(1, max(1, attempts) + 1):
-            try:
-                response = requests.post(
-                    target,
-                    json=payload,
-                    headers=request_headers,
-                    timeout=max(3, int(timeout_s)),
-                )
-                if response.status_code < 400:
-                    return {
-                        "ok": True,
-                        "status_code": response.status_code,
-                        "attempt": attempt,
-                        "response_text": response.text[:1000],
-                    }
-                last_error = RuntimeError(f"Webhook failed with HTTP {response.status_code}")
-            except Exception as exc:  # noqa: BLE001
-                last_error = exc
+        async with aiohttp.ClientSession() as session:
+            for attempt in range(1, max(1, attempts) + 1):
+                try:
+                    async with session.post(
+                        target,
+                        json=payload,
+                        headers=request_headers,
+                        timeout=max(3, int(timeout_s)),
+                    ) as response:
+                        if response.status < 400:
+                            # Read text to ensure connection closes cleanly
+                            text = await response.text()
+                            return {
+                                "ok": True,
+                                "status_code": response.status,
+                                "attempt": attempt,
+                                "response_text": text[:1000],
+                            }
+                        last_error = RuntimeError(f"Webhook failed with HTTP {response.status}")
+                except Exception as exc:  # noqa: BLE001
+                    last_error = exc
 
-            if attempt < attempts:
-                time.sleep(delay)
-                delay = min(delay * 2, 8.0)
+                if attempt < attempts:
+                    await asyncio.sleep(delay)
+                    delay = min(delay * 2, 8.0)
 
         raise RuntimeError(str(last_error) if last_error else "Webhook failed")
 

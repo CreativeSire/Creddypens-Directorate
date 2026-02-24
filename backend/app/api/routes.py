@@ -384,7 +384,7 @@ def delete_memory(memory_id: str, db: Session = Depends(get_db)) -> dict:
 
 
 @router.post("/v1/organizations/{org_id}/memories/extract", response_model=MemoryExtractOut)
-def extract_memories(org_id: str, payload: MemoryExtractIn, db: Session = Depends(get_db)) -> MemoryExtractOut:
+async def extract_memories(org_id: str, payload: MemoryExtractIn, db: Session = Depends(get_db)) -> MemoryExtractOut:
     db.execute(
         text("insert into organizations (org_id, name) values (:org_id, :name) on conflict (org_id) do nothing"),
         {"org_id": org_id, "name": ""},
@@ -405,7 +405,7 @@ def extract_memories(org_id: str, payload: MemoryExtractIn, db: Session = Depend
     if not messages:
         raise HTTPException(status_code=404, detail="No session messages found for extraction")
 
-    extracted = memory_extractor.extract_from_messages(messages=messages, agent_code=payload.agent_code)
+    extracted = await memory_extractor.extract_from_messages(messages=messages, agent_code=payload.agent_code)
     created = 0
     updated = 0
     output: list[MemoryOut] = []
@@ -614,7 +614,7 @@ def get_agent(agent_code: str, db: Session = Depends(get_db)) -> AgentDetailOut:
 
 
 @router.post("/v1/agents/{code}/chat", response_model=ChatOut)
-def chat_with_agent(code: str, payload: ChatIn, db: Session = Depends(get_db)) -> ChatOut:
+async def chat_with_agent(code: str, payload: ChatIn, db: Session = Depends(get_db)) -> ChatOut:
     agent = db.execute(select(AgentCatalog).where(AgentCatalog.code == code)).scalars().first()
     if not agent:
         # Keep behavior simple for v1: 404 if unknown code.
@@ -632,7 +632,7 @@ def chat_with_agent(code: str, payload: ChatIn, db: Session = Depends(get_db)) -
         # Legacy demo route; for production use the /execute endpoint which reads provider/model from DB.
         if (not agent.llm_provider or not agent.llm_model) and not settings.multi_llm_router_enabled:
             raise LLMError("Agent LLM provider/model is not configured.")
-        result = execute_via_litellm(
+        result = await execute_via_litellm(
             provider=agent.llm_provider or "",
             model=agent.llm_model or "",
             system=system,
@@ -987,7 +987,7 @@ def auth_bootstrap(
 
 
 @router.post("/v1/director/recommend")
-def director_recommend(payload: dict, db: Session = Depends(get_db)) -> dict:
+async def director_recommend(payload: dict, db: Session = Depends(get_db)) -> dict:
     """
     v1: In mock mode, uses heuristic matching over the agent catalog.
     When LLM_MOCK is off, this should route through LiteLLM with The Director system prompt.
@@ -1072,7 +1072,7 @@ def director_recommend(payload: dict, db: Session = Depends(get_db)) -> dict:
     )
     user_prompt = json.dumps({"user_message": message, "catalog": catalog_brief})
     try:
-        result = execute_via_litellm(
+        result = await execute_via_litellm(
             provider="anthropic",
             model=settings.anthropic_sonnet_model or "claude-sonnet-4-5-20250929",
             system=system_prompt,
@@ -1130,7 +1130,7 @@ def director_recommend(payload: dict, db: Session = Depends(get_db)) -> dict:
 
 
 @router.post("/v1/agents/{agent_code}/execute", response_model=ExecuteOut)
-def execute_agent(
+async def execute_agent(
     agent_code: str,
     payload: ExecuteIn,
     db: Session = Depends(get_db),
@@ -1165,6 +1165,30 @@ def execute_agent(
     # Build system prompt: start from stored prompt (or fallback), then inject domain boundary block.
     system_prompt = (agent.system_prompt or "").strip() or system_prompt_for_agent(agent_code)
     system_prompt = inject_domain_block(system_prompt, agent)
+
+    # Inject prompt_injection text from any skill packs installed on this agent or org-wide.
+    try:
+        skill_rows = db.execute(
+            text("""
+                select sc.prompt_injection, sc.name
+                from skill_installations si
+                join skill_catalog sc on sc.skill_id = si.skill_id
+                where si.org_id = :org_id
+                  and (si.agent_code = :agent_code or si.agent_code is null)
+                  and sc.status = 'active'
+                  and sc.prompt_injection != ''
+                order by si.installed_at asc;
+            """),
+            {"org_id": org_id, "agent_code": agent_code},
+        ).mappings().all()
+        if skill_rows:
+            skill_blocks = "\n\n".join(
+                f"--- Skill: {r['name']} ---\n{r['prompt_injection']}"
+                for r in skill_rows
+            )
+            system_prompt = system_prompt + "\n\n\n--- Installed Skill Packs ---\n" + skill_blocks
+    except Exception:
+        pass  # Non-fatal: proceed without skill injection if tables not yet migrated
 
     context_lines = _to_context_lines(payload.context)
     memory_block = _session_memory_block(
@@ -1213,7 +1237,7 @@ def execute_agent(
             content=payload.message,
             metadata={"trace_id": trace_id},
         )
-        result = execute_via_litellm(
+        result = await execute_via_litellm(
             provider=agent.llm_provider or "",
             model=agent.llm_model or "",
             system=system_prompt,
@@ -1395,7 +1419,7 @@ async def execute_agent_stream(
     x_org_id: str | None = Header(default=None, alias="X-Org-Id"),
 ):
     org_id = x_org_id or "org_test"
-    result = execute_agent(agent_code=agent_code, payload=payload, db=db, x_org_id=org_id)
+    result = await execute_agent(agent_code=agent_code, payload=payload, db=db, x_org_id=org_id)
 
     async def event_gen():
         words = result.response.split(" ")
@@ -1838,7 +1862,7 @@ async def test_integration(integration_id: str, payload: IntegrationTestIn, db: 
 
     if integration_type == "slack":
         webhook_url = str(config.get("webhook_url") or "")
-        result = slack_integration.post_message(
+        result = await slack_integration.post_message(
             webhook_url=webhook_url,
             text=str(payload.payload.get("text") or "CreddyPens integration test message"),
         )
@@ -1875,15 +1899,15 @@ async def test_integration(integration_id: str, payload: IntegrationTestIn, db: 
         body = payload.payload.get("payload")
         if not isinstance(body, dict):
             body = {"message": "CreddyPens integration test"}
-        result = webhook_integration.send_webhook(url=url, payload=body, headers=merged_headers)
+        result = await webhook_integration.send_webhook(url=url, payload=body, headers=merged_headers)
         return {"ok": True, "integration_type": "webhook", "result": result}
 
     raise HTTPException(status_code=400, detail=f"Unsupported integration_type: {integration_type}")
 
 
 @router.post("/v1/webhooks/test")
-def test_webhook(payload: WebhookTestIn) -> dict:
-    result = webhook_integration.send_webhook(
+async def test_webhook(payload: WebhookTestIn) -> dict:
+    result = await webhook_integration.send_webhook(
         url=payload.url,
         payload=payload.payload,
         headers={str(key): str(value) for key, value in payload.headers.items()},
@@ -2191,7 +2215,7 @@ def validate_workflow_definition(payload: dict, db: Session = Depends(get_db)) -
 
 
 @router.post("/v1/workflows/execute", response_model=WorkflowExecuteOut)
-def execute_workflow(
+async def execute_workflow(
     payload: WorkflowExecuteIn,
     db: Session = Depends(get_db),
     x_org_id: str | None = Header(default=None, alias="X-Org-Id"),
@@ -2208,7 +2232,7 @@ def execute_workflow(
     definition = payload.workflow_definition if isinstance(payload.workflow_definition, dict) else _build_workflow_definition(payload.steps)
     context = payload.context
     engine = WorkflowEngine(db)
-    final_response, step_results = engine.execute_workflow(
+    final_response, step_results = await engine.execute_workflow(
         org_id=org_id,
         session_id=session_id,
         initial_message=payload.initial_message,
@@ -2344,7 +2368,7 @@ def list_workflow_templates(
 
 
 @router.post("/v1/workflows/templates/{template_id}/run", response_model=WorkflowExecuteOut)
-def run_workflow_template(
+async def run_workflow_template(
     template_id: str,
     payload: WorkflowTemplateRunIn,
     db: Session = Depends(get_db),
@@ -2381,7 +2405,7 @@ def run_workflow_template(
         workflow_definition=definition,
     )
     try:
-        result = execute_workflow(payload=run_input, db=db, x_org_id=org_id)
+        result = await execute_workflow(payload=run_input, db=db, x_org_id=org_id)
         db.execute(
             text(
                 """
@@ -2528,7 +2552,7 @@ def list_workflow_schedules(
 
 
 @router.post("/v1/workflows/schedules/{schedule_id}/run", response_model=WorkflowScheduledRunOut)
-def run_workflow_schedule(
+async def run_workflow_schedule(
     schedule_id: str,
     db: Session = Depends(get_db),
     x_org_id: str | None = Header(default=None, alias="X-Org-Id"),
@@ -2563,7 +2587,7 @@ def run_workflow_schedule(
         context=ExecuteContext(**(row["context"] or {})),
         steps=[WorkflowStepIn(**item) for item in (row["steps"] or [])],
     )
-    result = execute_workflow(payload=run_input, db=db, x_org_id=org_id)
+    result = await execute_workflow(payload=run_input, db=db, x_org_id=org_id)
 
     last_run = datetime.now(timezone.utc)
     next_run = _next_run_at(str(row["cron_expression"]), str(row["timezone"]))
@@ -2610,7 +2634,7 @@ def run_workflow_schedule(
 
 
 @router.post("/v1/workflows/schedules/run-due", response_model=WorkflowDueRunOut)
-def run_due_workflow_schedules(
+async def run_due_workflow_schedules(
     limit: int = 10,
     db: Session = Depends(get_db),
     x_org_id: str | None = Header(default=None, alias="X-Org-Id"),
@@ -2640,7 +2664,7 @@ def run_due_workflow_schedules(
     for row in due:
         schedule_id = str(row["schedule_id"])
         try:
-            out = run_workflow_schedule(schedule_id=schedule_id, db=db, x_org_id=org_id)
+            out = await run_workflow_schedule(schedule_id=schedule_id, db=db, x_org_id=org_id)
             items.append(WorkflowDueRunItem(schedule_id=schedule_id, workflow_id=out.workflow.workflow_id, status="completed"))
         except HTTPException as e:
             items.append(WorkflowDueRunItem(schedule_id=schedule_id, status="failed", error=str(e.detail)))

@@ -398,6 +398,39 @@ def ensure_schema(engine: Engine) -> None:
     create unique index if not exists uq_org_model_policy
       on org_model_policies(org_id, coalesce(agent_code, ''));
     create index if not exists idx_org_model_policy_org on org_model_policies(org_id);
+
+    -- Skill marketplace
+    create table if not exists skill_catalog (
+      skill_id text primary key,
+      name text not null,
+      category text not null,
+      description text not null default '',
+      author text not null default 'Directorate',
+      compatible_agents jsonb not null default '[]'::jsonb,
+      prompt_injection text not null default '',
+      domain_tags jsonb not null default '[]'::jsonb,
+      tool_actions jsonb not null default '[]'::jsonb,
+      price_cents integer not null default 0,
+      status text not null default 'active',
+      install_count integer not null default 0,
+      created_at timestamptz not null default now()
+    );
+
+    create table if not exists skill_installations (
+      installation_id uuid primary key default gen_random_uuid(),
+      org_id text not null references organizations(org_id) on delete cascade,
+      agent_code text references agent_catalog(code) on delete cascade,
+      skill_id text not null references skill_catalog(skill_id) on delete cascade,
+      installed_at timestamptz not null default now()
+    );
+    create unique index if not exists idx_skill_install_unique_agent
+      on skill_installations(org_id, agent_code, skill_id)
+      where agent_code is not null;
+    create unique index if not exists idx_skill_install_unique_org
+      on skill_installations(org_id, skill_id)
+      where agent_code is null;
+    create index if not exists idx_skill_installations_org on skill_installations(org_id);
+    create index if not exists idx_skill_installations_agent on skill_installations(org_id, agent_code);
     """
     with engine.begin() as conn:
         conn.execute(text(ddl))

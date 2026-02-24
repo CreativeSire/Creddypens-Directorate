@@ -148,6 +148,16 @@ def inject_file_context(*, org_id: str | None, file_ids: list[str] | None) -> st
         return ""
 
 
+def _truncate_context(text: str, max_chars: int = 120000) -> str:
+    """
+    Simple character-based truncation to prevent context window overflows.
+    120k chars is roughly 30k-40k tokens, safe for most modern models.
+    """
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "\n...[context truncated due to length]..."
+
+
 def to_litellm_model(provider: str, model: str) -> str:
     provider = (provider or "").strip()
     model = (model or "").strip()
@@ -160,7 +170,7 @@ def to_litellm_model(provider: str, model: str) -> str:
     return f"{provider}/{model}"
 
 
-def execute_via_litellm(
+async def execute_via_litellm(
     *,
     provider: str,
     model: str,
@@ -242,6 +252,9 @@ def execute_via_litellm(
             "Use available context blocks above to provide accurate answers. "
             "If context is missing, clearly state assumptions."
         )
+    
+    # Simple truncation to prevent context window overflow
+    user_message = _truncate_context(user_message)
 
     if org_id:
         preference = model_policy_service.get_preference(org_id=org_id, agent_code=agent_code)
@@ -258,7 +271,7 @@ def execute_via_litellm(
         try:
             from app.llm.multi_router import LLMRequest, get_multi_llm_router
 
-            routed = get_multi_llm_router().execute(
+            routed = await get_multi_llm_router().execute(
                 LLMRequest(
                     system=system,
                     user=user_message,
@@ -304,7 +317,7 @@ def execute_via_litellm(
         }
 
     try:
-        from litellm import completion  # type: ignore[import-not-found]
+        from litellm import acompletion  # type: ignore[import-not-found]
     except Exception as e:  # pragma: no cover
         raise LLMError("litellm is not installed. Run: pip install -r requirements.txt") from e
 
@@ -312,9 +325,11 @@ def execute_via_litellm(
     retries = max(0, int(settings.litellm_retries))
     resp: Any = None
     last_error: Exception | None = None
+    
+    import asyncio
     for attempt in range(retries + 1):
         try:
-            resp = completion(
+            resp = await acompletion(
                 model=model_used,
                 messages=[
                     {"role": "system", "content": system},
@@ -329,7 +344,8 @@ def execute_via_litellm(
             last_error = e
             if attempt >= retries or not _is_retryable_error(e):
                 break
-            time.sleep(min(1.5, 0.35 * (attempt + 1)))
+            # Non-blocking sleep
+            await asyncio.sleep(min(1.5, 0.35 * (attempt + 1)))
 
     if last_error is not None:
         msg = str(last_error).strip()
@@ -400,12 +416,3 @@ def execute_via_litellm(
         "search_used": search_used,
         "docs_used": docs_used,
     }
-    if org_id:
-        preference = model_policy_service.get_preference(org_id=org_id, agent_code=agent_code)
-        if preference:
-            pref_provider = (preference.get("preferred_provider") or "").strip()
-            pref_model = (preference.get("preferred_model") or "").strip()
-            if pref_provider:
-                provider = pref_provider
-            if pref_model:
-                model = pref_model

@@ -13,6 +13,9 @@ from app.db import engine
 from app.schema import ensure_schema
 
 
+from app.agents.prompts import build_elite_prompt, inject_domain_block, system_prompt_for_agent
+
+
 DATA_PATH = Path(__file__).resolve().parents[1] / "data" / "agent_dossiers.json"
 
 DEPARTMENT_MAP = {
@@ -455,41 +458,16 @@ ACTIVE_ROUTES = {
         "llm_profile": {"default": "claude_opus"},
         "llm_provider": "anthropic",
         "llm_model": "claude-opus-4-5-20251101",
-        "system_prompt": (
-            "You are Author-01, a specialized Content Writer deployed by The CreddyPens Directorate. "
-            "Your function is to produce high-quality written content including blog posts, YouTube scripts, ad copy, "
-            "email sequences, and video sales letters. You write in the client's brand voice as defined in their "
-            "configuration profile. You always produce well-researched, structured, and engaging content. You do not "
-            "produce content that is misleading, defamatory, or violates copyright. When asked to write on a topic you "
-            "do not have sufficient information about, you ask one clarifying question before proceeding."
-        ),
     },
     "Assistant-01": {
         "llm_profile": {"default": "claude_sonnet"},
         "llm_provider": "anthropic",
         "llm_model": "claude-sonnet-4-5-20250929",
-        "system_prompt": (
-            "You are Assistant-01, a Virtual Assistant deployed by The CreddyPens Directorate. Your function is to help "
-            "with email drafting, meeting scheduling, task organization, research summarization, and general operational "
-            "support. You are efficient, precise, and professional. You do not make commitments on behalf of the client "
-            "without explicit instruction. You do not access external systems unless the client has configured an "
-            "integration. When a task is outside your capability, you say so clearly and suggest what the client should "
-            "do instead."
-        ),
     },
     "Greeter-01": {
         "llm_profile": {"default": "claude_sonnet"},
         "llm_provider": "anthropic",
         "llm_model": "claude-sonnet-4-5-20250929",
-        "system_prompt": (
-            "You are Greeter-01, an AI Receptionist deployed by The CreddyPens Directorate on behalf of the client "
-            "company specified in your configuration. Your function is to handle inbound customer inquiries "
-            "professionally and warmly. You answer common questions using the company information provided in your "
-            "configuration. You collect the customer's name and the purpose of their inquiry. You route complex or "
-            "sensitive issues by informing the customer that a team member will follow up. You never fabricate "
-            "information about the company. You never discuss pricing, contracts, or legal matters unless the client "
-            "has explicitly provided that information in your configuration."
-        ),
     },
 }
 
@@ -537,7 +515,25 @@ def load_dossiers() -> list[dict]:
 def to_seed_row(item: dict) -> dict:
     code = canonical_code(str(item.get("code", "")).strip())
     route = ACTIVE_ROUTES.get(code, DEFAULT_ROUTE)
-    system_prompt = route.get("system_prompt") or build_default_system_prompt(item, code)
+    
+    # Decide between Elite Prompt and Default Prompt
+    personality = str(item.get("personality", "")).strip()
+    style = str(item.get("communication_style", "")).strip()
+    ops = item.get("operational_sections") or []
+    
+    if personality and style and ops:
+        system_prompt = build_elite_prompt(
+            human_name=str(item.get("human_name", "")).strip() or code,
+            role=str(item.get("role", "")).strip() or code,
+            department=DEPARTMENT_MAP.get(str(item.get("department", "")).strip(), "Directorate"),
+            description=str(item.get("description", "")).strip(),
+            personality=personality,
+            style=style,
+            operational_sections=ops
+        )
+    else:
+        system_prompt = route.get("system_prompt") or build_default_system_prompt(item, code)
+        
     domain = AGENT_DOMAIN_DATA.get(code, {})
     return {
         "agent_id": code.lower(),

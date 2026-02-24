@@ -64,25 +64,6 @@ class ResponseEvaluator:
         self.provider = (settings.academy_judge_provider or "groq").strip()
         self.model = (settings.academy_judge_model or "llama-3.3-70b-versatile").strip()
 
-    def evaluate_sync(
-        self,
-        *,
-        user_message: str,
-        agent_response: str,
-        agent_role: str,
-        expected_qualities: list[str] | None = None,
-    ) -> dict[str, Any]:
-        subscores = self._judge_all_sync(
-            user_message=user_message,
-            agent_response=agent_response,
-            agent_role=agent_role,
-            expected_qualities=expected_qualities or [],
-        )
-        overall = 0.0
-        for criterion, details in self.EVALUATION_CRITERIA.items():
-            overall += float(subscores.get(criterion, 50.0)) * float(details["weight"])
-        return {"overall": round(overall, 2), "subscores": subscores}
-
     async def evaluate(
         self,
         *,
@@ -100,16 +81,18 @@ class ResponseEvaluator:
           "subscores": { "helpfulness": 80, ... }
         }
         """
-        return await anyio.to_thread.run_sync(
-            lambda: self.evaluate_sync(
-                user_message=user_message,
-                agent_response=agent_response,
-                agent_role=agent_role,
-                expected_qualities=expected_qualities,
-            )
+        subscores = await self._judge_all(
+            user_message=user_message,
+            agent_response=agent_response,
+            agent_role=agent_role,
+            expected_qualities=expected_qualities or [],
         )
+        overall = 0.0
+        for criterion, details in self.EVALUATION_CRITERIA.items():
+            overall += float(subscores.get(criterion, 50.0)) * float(details["weight"])
+        return {"overall": round(overall, 2), "subscores": subscores}
 
-    def _judge_all_sync(
+    async def _judge_all(
         self,
         *,
         user_message: str,
@@ -119,9 +102,10 @@ class ResponseEvaluator:
     ) -> dict[str, float]:
         judge_system = (
             "You are an expert evaluator grading an AI agent response.\n"
-            "Score each criterion as a number from 0 to 100.\n"
-            "Return ONLY valid JSON with keys: helpfulness, accuracy, professionalism, completeness, clarity.\n"
-            "Output must start with '{' and end with '}'. No markdown, no commentary."
+            "First, analyze the response step-by-step in your 'reasoning' field.\n"
+            "Then, score each criterion as a number from 0 to 100.\n"
+            "Return ONLY valid JSON with keys: reasoning, helpfulness, accuracy, professionalism, completeness, clarity.\n"
+            "Output must start with '{' and end with '}'."
         )
 
         qualities_text = f"Expected qualities: {', '.join(expected_qualities)}" if expected_qualities else "Expected qualities: (none provided)"
@@ -148,12 +132,11 @@ User Message:
 Agent Response:
 {agent_response}
 
-Return JSON only, example:
-{{"helpfulness": 80, "accuracy": 85, "professionalism": 70, "completeness": 65, "clarity": 75}}
+Return JSON with reasoning and scores.
 """
 
         try:
-            result = execute_via_litellm(
+            result = await execute_via_litellm(
                 provider=self.provider,
                 model=self.model,
                 system=judge_system,

@@ -85,10 +85,71 @@ class WorkflowEngine:
         if not expression:
             return True
         hydrated = self.resolve_variables(expression, variables)
+        
+        # Security: Use AST parsing to strictly limit allowed operations
+        # No function calls, no attribute access, no imports.
+        import ast
+        import operator
+
+        # Supported operators
+        ops = {
+            ast.Eq: operator.eq,
+            ast.NotEq: operator.ne,
+            ast.Lt: operator.lt,
+            ast.LtE: operator.le,
+            ast.Gt: operator.gt,
+            ast.GtE: operator.ge,
+            ast.In: lambda x, y: x in y,
+            ast.NotIn: lambda x, y: x not in y,
+            ast.And: lambda x, y: x and y,
+            ast.Or: lambda x, y: x or y,
+            ast.Not: operator.not_,
+        }
+
+        def _eval_node(node):
+            if isinstance(node, ast.Expression):
+                return _eval_node(node.body)
+            elif isinstance(node, ast.Constant): # Python 3.8+
+                return node.value
+            elif isinstance(node, ast.NameConstant): # Python < 3.8
+                return node.value
+            elif isinstance(node, ast.Str): # Python < 3.8
+                return node.s
+            elif isinstance(node, ast.Num): # Python < 3.8
+                return node.n
+            elif isinstance(node, ast.Compare):
+                left = _eval_node(node.left)
+                for op, right_node in zip(node.ops, node.comparators):
+                    right = _eval_node(right_node)
+                    if not ops.get(type(op))(left, right):
+                        return False
+                    left = right
+                return True
+            elif isinstance(node, ast.BoolOp):
+                values = [_eval_node(v) for v in node.values]
+                if isinstance(node.op, ast.And):
+                    return all(values)
+                elif isinstance(node.op, ast.Or):
+                    return any(values)
+            elif isinstance(node, ast.UnaryOp):
+                return ops[type(node.op)](_eval_node(node.operand))
+            elif isinstance(node, ast.Name):
+                # Allow basic True/False/None
+                if node.id == "True": return True
+                if node.id == "False": return False
+                if node.id == "None": return None
+                # Variables should be resolved by resolve_variables string replacement before this
+                # But if we want to support unquoted vars, we could look them up here. 
+                # For now, sticking to the existing pattern where resolve_variables handles data.
+                return node.id 
+            
+            raise ValueError(f"Unsafe or unsupported operation: {type(node)}")
+
         try:
-            allowed = {"True": True, "False": False}
-            return bool(eval(hydrated, {"__builtins__": {}}, allowed))  # noqa: S307
+            tree = ast.parse(hydrated, mode='eval')
+            return bool(_eval_node(tree))
         except Exception:
+            # Fallback to False on any error or security violation
             return False
 
     def get_next_step(self, *, current_step: dict[str, Any], condition_result: bool, order: list[str], current_index: int) -> str | None:
@@ -109,7 +170,7 @@ class WorkflowEngine:
             return order[current_index + 1]
         return None
 
-    def execute_workflow(
+    async def execute_workflow(
         self,
         *,
         org_id: str,
@@ -170,7 +231,7 @@ class WorkflowEngine:
 
             trace_id = str(uuid.uuid4())
             if action in {"slack", "email", "webhook"}:
-                response_text = self._execute_integration_action(
+                response_text = await self._execute_integration_action(
                     action=action,
                     integration_id=integration_id,
                     input_message=input_message,
@@ -187,7 +248,7 @@ class WorkflowEngine:
                 system_prompt = (agent.system_prompt or "").strip() or system_prompt_for_agent(agent_code)
                 system_prompt = inject_domain_block(system_prompt, agent)
                 try:
-                    result = execute_via_litellm(
+                    result = await execute_via_litellm(
                         provider=agent.llm_provider or "",
                         model=agent.llm_model or "",
                         system=system_prompt,
@@ -257,7 +318,7 @@ class WorkflowEngine:
 
         return str(variables.get("previous_response") or initial_message), results
 
-    def _execute_integration_action(
+    async def _execute_integration_action(
         self,
         *,
         action: str,
@@ -290,7 +351,7 @@ class WorkflowEngine:
                 raise HTTPException(status_code=400, detail=f"Integration {integration_id} is not slack")
             webhook_url = str(config.get("webhook_url") or "")
             text_value = str(action_config.get("text") or input_message)
-            slack_integration.post_message(webhook_url=webhook_url, text=text_value)
+            await slack_integration.post_message(webhook_url=webhook_url, text=text_value)
             return f"Slack message sent ({len(text_value)} chars)"
 
         if action == "email":
@@ -306,7 +367,7 @@ class WorkflowEngine:
                 raise HTTPException(status_code=400, detail="Email workflow action requires to_email")
             subject = str(action_config.get("subject") or "CreddyPens workflow notification")
             body = str(action_config.get("body") or input_message)
-            email_integration.send_email_sync(
+            await email_integration.send_email(
                 smtp_host=smtp_host,
                 smtp_port=smtp_port,
                 smtp_user=smtp_user,
@@ -327,7 +388,7 @@ class WorkflowEngine:
             body = action_config.get("payload")
             if not isinstance(body, dict):
                 body = {"message": input_message}
-            webhook_integration.send_webhook(url=url, payload=body, headers={str(k): str(v) for k, v in headers.items()})
+            await webhook_integration.send_webhook(url=url, payload=body, headers={str(k): str(v) for k, v in headers.items()})
             return f"Webhook posted to {url}"
 
         raise HTTPException(status_code=400, detail=f"Unsupported workflow action: {action}")

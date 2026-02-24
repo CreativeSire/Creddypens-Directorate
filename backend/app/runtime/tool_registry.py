@@ -7,6 +7,7 @@ from app.runtime.hooks import RuntimeEvent, hook_bus
 from app.runtime.tool_policy import tool_policy_service
 from app.tools.document_search import doc_search
 from app.tools.web_search import web_search
+from app.tools.scheduling import scheduling_tool
 
 
 @dataclass
@@ -23,6 +24,8 @@ class ToolRegistry:
         self._tools: dict[str, Callable[..., Any]] = {
             "web_search": self._run_web_search,
             "document_search": self._run_document_search,
+            "check_availability": self._run_check_availability,
+            "book_meeting": self._run_book_meeting,
         }
 
     def list_tools(self) -> list[str]:
@@ -81,6 +84,12 @@ class ToolRegistry:
     def _run_document_search(self, query: str, limit: int = 3) -> dict[str, Any]:
         rows = doc_search.search(query=query, limit=limit)
         return {"rows": rows, "formatted": doc_search.format_results(rows, max_content_length=350)}
+
+    def _run_check_availability(self, date_str: str | None = None) -> dict[str, Any]:
+        return scheduling_tool.check_availability(date_str=date_str)
+
+    def _run_book_meeting(self, name: str, email: str, slot: str, date_str: str) -> dict[str, Any]:
+        return scheduling_tool.book_meeting(name=name, email=email, slot=slot, date_str=date_str)
 
 
 tool_registry = ToolRegistry()

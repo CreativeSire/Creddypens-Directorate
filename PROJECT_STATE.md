@@ -25,16 +25,18 @@ CreddyPens is an AI workforce platform where organizations hire role-based AI ag
   - `GET /v1/organizations/{org_id}/agents/{agent_code}/stats`
   - Academy routes under `/v1/academy/*`
   - Router stats: `GET /v1/llm/router/stats`
+  - Skill marketplace routes under `/v1/skills/*` and `/v1/organizations/{org_id}/skills/*`
 
 - Agent execution flow:
   1. Validate org + hired agent.
   2. Build system context for role.
   3. Inject domain boundary block (domain_tags, related_agents, out_of_scope_examples) into system prompt.
-  4. Send request through `execute_via_litellm`.
-  5. Smart router selects provider/model.
-  6. Parse response for `[REFER:CODE]` referral tag.
-  7. Resolve referred agent, check hire status, return SuggestedAgent payload.
-  8. Log interaction to `interaction_logs`.
+  4. Inject installed skill pack `prompt_injection` blocks into system prompt (org-wide + agent-specific).
+  5. Send request through `execute_via_litellm`.
+  6. Smart router selects provider/model.
+  7. Parse response for `[REFER:CODE]` referral tag.
+  8. Resolve referred agent, check hire status, return SuggestedAgent payload.
+  9. Log interaction to `interaction_logs`.
 
 - Multi-LLM routing:
   - Smart routing exists and is integrated.
@@ -59,6 +61,7 @@ CreddyPens is an AI workforce platform where organizations hire role-based AI ag
   - Agent dossier
   - My Agents
   - Academy
+  - Skills Marketplace
   - Settings (baseline)
 - My Agents flow implemented:
   - Hired-agent list
@@ -97,6 +100,32 @@ CreddyPens is an AI workforce platform where organizations hire role-based AI ag
 ---
 
 ## 5) Latest major completed milestones
+
+## 2026-02-20 (Skills Marketplace)
+- Skill Marketplace system built end-to-end:
+  - Added `skill_catalog` + `skill_installations` DB tables to `backend/app/schema.py`
+    - Partial unique indexes support both agent-specific and org-wide installs.
+  - Created `backend/app/api/skills.py` with full marketplace API:
+    - `GET /v1/skills` — browse all active skills (optional `?category=` filter)
+    - `GET /v1/skills/{skill_id}` — skill detail
+    - `GET /v1/organizations/{org_id}/skills` — all installed for org
+    - `GET /v1/organizations/{org_id}/agents/{agent_code}/skills` — agent-specific + org-wide
+    - `POST/DELETE /v1/organizations/{org_id}/skills/{skill_id}` — org-wide install/uninstall
+    - `POST/DELETE /v1/organizations/{org_id}/agents/{agent_code}/skills/{skill_id}` — per-agent install/uninstall
+  - Created `backend/scripts/seed_skills.py` with 40 skill packs across 8 categories:
+    - Marketing & Creative (8), Sales & Business Dev (5), Operations & Admin (6), Technical & IT (6)
+    - Customer Experience (4), Specialized Services (8), Product & Design (2), Learning & Development (1)
+    - Mix of free and paid ($7.99–$19.99/mo) packs
+  - Injected installed skill `prompt_injection` text into the execute system prompt at runtime
+    (`backend/app/api/routes.py` — non-fatal, graceful fallback if tables not migrated)
+  - Registered skills router in `backend/app/main.py`
+  - Built `frontend/src/app/dashboard/skills/page.tsx` — full marketplace UI:
+    - Category filter tabs, skill cards with domain tags, price badges
+    - One-click install/uninstall with live feedback
+    - Install count display, author attribution
+    - Paid skills show "COMING SOON" (Stripe billing in next release)
+  - Added "Skills" nav item to sidebar (`frontend/src/components/navigation/sidebar.tsx`)
+  - Seeded 40 skills into the database via `python scripts/seed_skills.py`
 
 ## 2026-02-20
 - Week 4 Day 25-26 completed (enhanced analytics):
