@@ -361,3 +361,5 @@ Update this file on every meaningful build change. For each update:
 4. If testing was run, update **Most recent verified run**.
 
 Rule: no merge to `main` without reflecting major behavior changes here.
+
+CI trigger validation commit - 02/24/2026 17:26:11
